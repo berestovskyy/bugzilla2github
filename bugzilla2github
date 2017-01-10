@@ -88,12 +88,12 @@ priority2labels = {
 severity2labels = {
     "__name__": "severity to GitHub labels",
     "enhancement": ["enhancement"],
-    "trivial": ["minor"],
-    "minor": ["minor"],
-    "normal": [],
-    "major": ["major"],
-    "critical": ["major"],
-    "blocker": ["major"],
+    "trivial": ["minor", "bug"],
+    "minor": ["minor", "bug"],
+    "normal": ["bug"],
+    "major": ["major", "bug"],
+    "critical": ["major", "bug"],
+    "blocker": ["major", "bug"],
 }
 resolution2labels = {
     "__name__": "resolution to GitHub labels",

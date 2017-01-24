@@ -570,6 +570,10 @@ def github_comment_update(issue):
     if r:
         comments = r.json()
         for comment in comments:
+            if not re.search(os.path.basename(__file__), comment["body"]):
+                continue
+            if not re.search(r"(?ims).*#([0-9]+).*", comment["body"]):
+                continue
             bugzilla_id = re.sub(r"(?ims).*#([0-9]+).*", r"\1",
                             comment["body"])
             if not bugzilla_id:

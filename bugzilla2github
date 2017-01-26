@@ -648,19 +648,23 @@ def github_postponed_issues_add(issues, postponed):
             print "\tissue #%d does not exist, breaking..." % id
             break
         issue = github_issue_get(id)
-        bugzilla_id = re.sub(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
-        if bugzilla_id:
-            bugzilla_id = int(bugzilla_id)
-            print "\tissue #%d was imported from Bugzilla (bug %d), updating..." % (id, bugzilla_id)
-            if bugzilla_id not in postponed:
-                print "Error adding postponed issue: Bugzilla bug %d is not postponed" % bugzilla_id
-                exit(1)
-            bugzilla_issue = postponed.pop(bugzilla_id)
-            issue_renumber(bugzilla_issue, id)
-            github_issue_update(bugzilla_issue)
-            github_comment_update(bugzilla_issue)
-        else:
+        if not re.search(os.path.basename(__file__), issue["body"]) \
+            or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", issue["body"]):
             print "\tissue #%d is not from the Bugzilla, skipping..." % id
+        else:
+            bugzilla_id = re.sub(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
+            if bugzilla_id:
+                bugzilla_id = int(bugzilla_id)
+                print "\tissue #%d was imported from Bugzilla (bug %d), updating..." % (id, bugzilla_id)
+                if bugzilla_id not in postponed:
+                    print "Error adding postponed issue: Bugzilla bug %d is not postponed" % bugzilla_id
+                    exit(1)
+                bugzilla_issue = postponed.pop(bugzilla_id)
+                issue_renumber(bugzilla_issue, id)
+                github_issue_update(bugzilla_issue)
+                github_comment_update(bugzilla_issue)
+            else:
+                print "\tissue #%d is not from the Bugzilla, skipping..." % id
 
     # Now check the postponed issues and append them to the end of the issues
     for i in xrange(len(issues)):

@@ -370,7 +370,11 @@ def bug_convert(bug):
     if "blocked" in bug:
         ret["body"].append("Blocker for:  " + ids_convert(bug.pop("blocked")))
     if "see_also" in bug:
-        ret["body"].append("See also:     " + bug.pop("see_also"))
+        if isinstance(bug["see_also"], list):
+            for see_also in bug.pop("see_also"):
+                ret["body"].append("See also:     " + see_also)
+        else:
+            ret["body"].append("See also:     " + bug.pop("see_also"))
     ret["body"].append("Last updated: " + ret["updated_at"])
     ret["body"].append("")
 

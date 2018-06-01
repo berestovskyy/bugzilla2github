@@ -2,25 +2,28 @@
 # -*- coding: utf-8 -*-
 #
 # Bugzilla XML File to GitHub Issues Converter
-# by Andriy Berestovskyy
+# by Andriy Berestovskyy <berestovskyy@gmail.com>
 #
 # How to use the script:
-# 1. Generate a GitHub access token:
+# 1. Export Bugzilla issues into an XML file:
+#    - in Bugzilla select "Search"
+#    - select all statuses
+#    - at the very end click an XML icon
+#    - save the XML into a file
+#
+# 2. Generate a GitHub access token:
 #    - on GitHub select "Settings"
 #    - select "Personal access tokens"
 #    - click "Generate new token"
 #    - type a token description, i.e. "bugzilla2github"
 #    - select "public_repo" to access just public repositories
-#    - save the generated token into the migration script
-# 2. Export Bugzilla issues into an XML file:
-#    - in Bugzilla select "Search"
-#    - select all statuses
-#    - at the very end click an XML icon
-#    - save the XML into a file
+#    - save the generated token
+#
 # 3. Run the migration script and check all the warnings:
-#    bugzilla2github -x bugzilla.xml -o berestovskyy -r test -t beefbeefbeef
+#    bugzilla2github -x export.xml -o github_owner -r github_repo -t token
+#
 # 4. Run the migration script again and force the updates:
-#    bugzilla2github -x bugzilla.xml -o berestovskyy -r test -t beefbeefbeef -f
+#    bugzilla2github -x export.xml -o github_owner -r github_repo -t token -f
 #
 
 import json, getopt, os, pprint, re, requests, sys, time, xml.etree.ElementTree
@@ -29,10 +32,10 @@ reload(sys)
 sys.setdefaultencoding('utf-8')
 
 force_update = False
-xml_file = "ofp-bugzilla.xml"
+xml_file = "bugzilla-export.xml"
 github_url = "https://api.github.com"
-github_owner = "semihalf-berestovskyy-andriy"
-github_repo = "test-ofp"
+github_owner = ""
+github_repo = ""
 github_token = ""
 
 email2login = {
@@ -137,11 +140,11 @@ def usage():
     print "Bugzilla XML file to GitHub Issues Converter"
     print "Usage: %s [-h] [-f]\n" \
         "\t[-x <src XML file>]\n" \
-        "\t[-o <dst GitHub owner>] [-r <dst repo>] [-t <dst access token>]\n" \
+        "\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>\n" \
             % os.path.basename(__file__)
     print "Example:"
     print "\t%s -h" % os.path.basename(__file__)
-    print "\t%s -x bugzilla.xml -o dst_login -r dst_repo -t dst_token" \
+    print "\t%s -x export.xml -o github_login -r github_repo -t access_token" \
             % os.path.basename(__file__)
     exit(1)
 

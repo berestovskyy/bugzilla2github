@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Copy GitHub Issues between repos/owners
-# by Andriy Berestovskyy
+# by Andriy Berestovskyy <berestovskyy@gmail.com>
 #
 # To generate a GitHub access token:
 #    - on GitHub select "Settings"
@@ -20,12 +20,12 @@ sys.setdefaultencoding('utf-8')
 
 force_update = False
 github_url = "https://api.github.com"
-src_github_owner = "OpenFastPath"
-src_github_repo = "ofp"
+src_github_owner = ""
+src_github_repo = ""
 src_github_token = ""
 
-dst_github_owner = "semihalf-berestovskyy-andriy"
-dst_github_repo = "test-ofp"
+dst_github_owner = ""
+dst_github_repo = ""
 dst_github_token = ""
 
 

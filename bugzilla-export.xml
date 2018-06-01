@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<!DOCTYPE bugzilla SYSTEM "http://issues.openipfastpath.org/page.cgi?id=bugzilla.dtd">
+
+<bugzilla version="5.0rc2"
+          urlbase="http://issues.openipfastpath.org/"
+
+          maintainer="its@enea.com"
+          exporter="Andriy.Berestovsky@cavium.com"
+>
+
+    <bug>
+          <bug_id>1</bug_id>
+
+          <creation_ts>2015-03-16 14:49:36 +0100</creation_ts>
+          <short_desc>test</short_desc>
+          <delta_ts>2015-06-03 08:03:45 +0200</delta_ts>
+          <reporter_accessible>1</reporter_accessible>
+          <cclist_accessible>1</cclist_accessible>
+          <classification_id>1</classification_id>
+          <classification>Unclassified</classification>
+          <product>OpenFP</product>
+          <component>Other</component>
+          <version>unspecified</version>
+          <rep_platform>PC</rep_platform>
+          <op_sys>Linux</op_sys>
+          <bug_status>RESOLVED</bug_status>
+          <resolution>INVALID</resolution>
+
+
+          <bug_file_loc></bug_file_loc>
+          <status_whiteboard></status_whiteboard>
+          <keywords></keywords>
+          <priority>---</priority>
+          <bug_severity>enhancement</bug_severity>
+          <target_milestone>---</target_milestone>
+
+
+          <everconfirmed>1</everconfirmed>
+          <reporter>email@gmail.com</reporter>
+          <assigned_to name="Sorin Vultureanu">email@enea.com</assigned_to>
+          <cc>email@enea.com</cc>
+
+    <cc>email@enea.com</cc>
+          <estimated_time>0.00</estimated_time>
+          <remaining_time>0.00</remaining_time>
+          <actual_time>0.00</actual_time>
+
+
+
+          <token>1485263355-Tcn-HfYxq3wjdUVzTNZ4J9CkGN6MiYGvjtcrJT6rtvU</token>
+
+
+
+
+
+          <comment_sort_order>oldest_to_newest</comment_sort_order>
+          <long_desc isprivate="0" >
+    <commentid>1</commentid>
+    <comment_count>0</comment_count>
+    <who name="">email@gmail.com</who>
+    <bug_when>2015-03-16 14:49:36 +0100</bug_when>
+    <thetext>testing skdfsdf1112311</thetext>
+  </long_desc>
+
+
+
+    </bug>
+    <bug>
+          <bug_id>2</bug_id>
+
+          <creation_ts>2015-05-07 16:21:59 +0200</creation_ts>
+          <short_desc>Move private header files to public for eg TCP and UDP so that the structures can be used universally</short_desc>
+          <delta_ts>2015-06-26 12:36:40 +0200</delta_ts>
+          <reporter_accessible>1</reporter_accessible>
+          <cclist_accessible>1</cclist_accessible>
+          <classification_id>1</classification_id>
+          <classification>Unclassified</classification>
+          <product>OpenFP</product>
+          <component>Protocol - UDP</component>
+          <version>unspecified</version>
+          <rep_platform>Other</rep_platform>
+          <op_sys>Linux</op_sys>
+          <bug_status>RESOLVED</bug_status>
+          <resolution>FIXED</resolution>
+
+
+          <bug_file_loc></bug_file_loc>
+          <status_whiteboard></status_whiteboard>
+          <keywords></keywords>
+          <priority>---</priority>
+          <bug_severity>normal</bug_severity>
+          <target_milestone>---</target_milestone>
+
+
+          <everconfirmed>1</everconfirmed>
+          <reporter name="Dan Lilliehorn - Enea">email@enea.com</reporter>
+          <assigned_to name="Andras Berger">email@nokia.com</assigned_to>
+          <cc>email@nokia.com</cc>
+          <estimated_time>0.00</estimated_time>
+          <remaining_time>0.00</remaining_time>
+          <actual_time>0.00</actual_time>
+
+
+
+          <token>1485263355-Z-GCmgn1jbBIEbzUoH3o1zwizNDLI7q7zbMtk10BVQM</token>
+
+
+
+
+
+          <comment_sort_order>oldest_to_newest</comment_sort_order>
+          <long_desc isprivate="0" >
+    <commentid>2</commentid>
+    <comment_count>0</comment_count>
+    <who name="Dan Lilliehorn - Enea">email@enea.com</who>
+    <bug_when>2015-05-07 16:21:59 +0200</bug_when>
+    <thetext>Move private header files to public for eg TCP and UDP so that the structures can be used universally.
+
+(used for bugzilla testing, just picked the last entry in our task list)</thetext>
+  </long_desc>
+
+
+
+    </bug>
+
+</bugzilla>

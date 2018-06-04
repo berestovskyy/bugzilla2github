@@ -315,7 +315,7 @@ def comments_convert(comments, attachments):
 def bug_convert(bug):
     ret = {}
     ret["body"] = []
-    ret["body"].append("Note: the issue was created automatically with %s tool"
+    ret["body"].append("Note: the issue was created automatically with %s"
                         % os.path.basename(__file__))
     ret["body"].append("")
     ret["labels"] = []
@@ -378,7 +378,7 @@ def bug_convert(bug):
     ret["body"].append("Last updated: " + ret["updated_at"])
     ret["body"].append("")
 
-    # Put everything togather
+    # Put everything together
     ret["body"] = "\n".join(ret["body"]) + "\n\n" + "\n".join(ret["comments"])
     ret["assignees"] = [a[1:] for a in ret["assignees"] if a[0] == "@"]
 
@@ -546,7 +546,7 @@ def github_issue_append(issue):
 
 def renumbering_comment_create(orig_id, new_id):
     body = []
-    body.append("Note: the comment was created automatically with %s tool" \
+    body.append("Note: the comment was created automatically with %s" \
                     % os.path.basename(__file__))
     body.append("")
     body.append("---")

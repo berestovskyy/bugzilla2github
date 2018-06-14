@@ -35,6 +35,7 @@ import pprint
 import re
 import requests
 import sys
+import datetime
 import time
 import xml.etree.ElementTree
 from six.moves import range
@@ -43,7 +44,10 @@ reload(sys)
 sys.setdefaultencoding('utf-8')
 
 force_update = False
+debug = False
+max_bug_id = 0
 xml_file = "export.xml"
+# Please see https://developer.github.com/v3/issues/
 github_url = "https://api.github.com"
 github_owner = ""
 github_repo = ""
@@ -61,34 +65,8 @@ status2state = {
 }
 component2labels = {
     "__name__": "component to GitHub labels",
-    "ACL": [],
-    "API - Egress Packet processing": ["API"],
-    "API - Hook interface": ["API"],
-    "API - Ingress Packet processing": ["API"],
-    "API - Initiation Interface": ["API"],
-    "API - Interface configuration": ["API"],
-    "API - Logging": ["API"],
-    "API - Route and mac interface": ["API"],
-    "API - Socket API": ["API"],
-    "Build Environment Tools": ["build"],
-    "CLI - Command Line Interface": ["CLI"],
-    "Documentation": ["documentation"],
-    "Example applications": ["example"],
-    "Netlink config notifications": [],
-    "ODP compatibility": ["ODP"],
-    "OpenFP  - Core": [],
-    "Other": [],
-    "Protocol - ARP/NDP": [],
-    "Protocol - GRE": [],
-    "Protocol - ICMP": [],
-    "Protocol - IPv4": [],
-    "Protocol - IPv6": [],
-    "Protocol - SCTP": [],
-    "Protocol - TCP": ["TCP"],
-    "Protocol - UDP": [],
-    "QoS": [],
-    "TAP / Host OS packet fallback processing": [],
-    "Testing": ["test"],
+    "Testing": ["tests"],
+    "Documentation": ["docs"],
 }
 priority2labels = {
     "__name__": "priority to GitHub labels",
@@ -150,22 +128,28 @@ attachment_unused_fields = [
 
 def usage():
     print("Bugzilla XML file to GitHub Issues Converter")
-    print("Usage: %s [-h] [-f]" % os.path.basename(__file__))
+    print("Usage: %s [-h] [-f] [-d]" % os.path.basename(__file__))
     print("\t[-x <src XML file>]")
     print("\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>")
+    print("Where:")
+    print("\t-h  usage information")
+    print("\t-f  force updates (actually write the changes)")
+    print("\t-d  print debug information")
     print("Example:")
     print("\t%s -h" % os.path.basename(__file__))
-    print("\t%s -x export.xml -o github_login -r github_repo -t access_token" \
-        % os.path.basename(__file__))
+    print("\t%s -x export.xml -o github_login -r github_repo -t access_token"
+          % os.path.basename(__file__))
     exit(1)
 
 
 def XML2dict(parent):
+    global debug
     ret = {}
 
     for key in parent:
-        # TODO: debug
-        # print len(key), key.tag, key.attrib, key.text
+        if debug:
+            print(len(key), key.tag, key.attrib, key.text)
+
         if len(key) > 0:
             val = XML2dict(key)
         else:
@@ -255,8 +239,10 @@ def attachment_convert(idx, attach):
     ret = []
 
     id = attach.pop("attachid")
-    ret.append("> Attached file: %s (%s, %s bytes)" % (attach.pop("filename"),
-                                                       attach.pop("type"), attach.pop("size")))
+    ret.append("> Attached file: %s (%s, %s bytes)"
+               % (attach.pop("filename"),
+                  attach.pop("type"),
+                  attach.pop("size")))
     ret.append("> Description:   " + attach.pop("desc"))
 
     # Ignore some fields
@@ -342,8 +328,8 @@ def bug_convert(bug):
     # Convert long_desc and attachment to comments
     ret["comments"].extend(comments_convert(bug.pop("long_desc"), attachments))
     # Convert short_desc to title
-    ret["title"] = bug.pop("short_desc") + \
-        " (Bugzilla Bug " + str(ret["number"]) + ")"
+    ret["title"] = "%s (Bugzilla Bug %d)" \
+        % (bug.pop("short_desc"), ret["number"])
     # Convert creation_ts to created_at
     ret["created_at"] = bug.pop("creation_ts")
     # Convert delta_ts to updated_at
@@ -412,6 +398,8 @@ def bug_convert(bug):
 
 
 def bugs_convert(xml_root):
+    global max_bug_id
+
     issues = {}
     for xml_bug in xml_root.iter("bug"):
         bug = XML2dict(xml_bug)
@@ -419,15 +407,18 @@ def bugs_convert(xml_root):
         # Check for duplicates
         id = issue["number"]
         if id in issues:
-            print(("Error checking for duplicates: bug #%d is duplicated in the '%s'"
-                  % (id, xml_file)))
+            print("Error checking for duplicates:"
+                  " bug #%d is duplicated in the '%s'"
+                  % (id, xml_file))
         issues[id] = issue
+        max_bug_id = max(max_bug_id, int(id))
 
     return issues
 
 
 def github_get(url, avs={}):
     global xml_file, github_url, github_owner, github_repo, github_token
+    global debug
 
     if url[0] == "/":
         u = "%s%s" % (github_url, url)
@@ -438,15 +429,15 @@ def github_get(url, avs={}):
     else:
         u = "%s/repos/%s/%s/%s" % (github_url, github_owner, github_repo, url)
 
-    # TODO: debug
-    # print "GET: " + u
+    if debug:
+        print("GET: " + u)
 
     avs["access_token"] = github_token
     return requests.get(u, params=avs)
 
 
 def github_post(url, avs={}, fields=[]):
-    global force_update
+    global force_update, debug
     global xml_file, github_url, github_owner, github_repo, github_token
 
     if url[0] == "/":
@@ -462,9 +453,9 @@ def github_post(url, avs={}, fields=[]):
             exit(1)
         d[field] = avs[field]
 
-    # TODO: debug
-    # print "POST: " + u
-    # print "DATA: " + json.dumps(d)
+    if debug:
+        print("POST: " + u)
+        print("DATA: " + json.dumps(d))
 
     if force_update:
         return requests.post(u, params={"access_token": github_token},
@@ -580,8 +571,8 @@ def github_comment_add(issue):
     comment = renumbering_comment_create(orig_id, new_id)
     r = github_post("issues/%d/comments" % orig_id, comment, ["body"])
     if not r:
-        print("Error adding new comment to issue #%d on GitHub:\n%s" \
-            % (orig_id, r.headers))
+        print("Error adding new comment to issue #%d on GitHub:\n%s"
+              % (orig_id, r.headers))
         exit(1)
 
 
@@ -610,25 +601,69 @@ def github_comment_update(issue):
             r = github_post("issues/comments/%d" %
                             comment_id, comment, ["body"])
             if not r:
-                print("Error updating comment %d to issue #%d on GitHub:\n%s" \
-                    % (comment_id, orig_id, r.headers))
+                print("Error updating comment %d to issue #%d on GitHub:\n%s"
+                      % (comment_id, orig_id, r.headers))
                 exit(1)
             return
     print("\tcomment not found, adding a new one...")
     github_comment_add(issue)
 
 
+def dummy_issue_create(id):
+    ret = {}
+    ret["dummy"] = True
+    ret["body"] = []
+    ret["labels"] = []
+    ret["assignees"] = []
+    ret["comments"] = []
+    ret["number"] = id
+    ret["title"] = "Deleted bug, please ignore (Bugzilla Bug %d)" \
+        % ret["number"]
+    ret["created_at"] = datetime.datetime.utcnow().replace(
+        microsecond=0).isoformat() + "Z"
+    ret["updated_at"] = ret["created_at"]
+    ret["user.login"] = "bugzilla2github"
+    ret["state"] = "closed"
+
+    ret["body"].append("Note: the issue was created automatically with %s"
+                       % os.path.basename(__file__))
+    ret["body"].append("")
+    ret["body"].append("# Dummy Bugzilla Bug ID: %d" % ret["number"])
+    ret["body"].append("Date: " + ret["created_at"])
+    ret["body"].append("")
+    ret["body"].append("This bug was created during the import from Bugzilla.")
+    ret["body"].append("Github Issues Tracker allows to assign consecutive")
+    ret["body"].append("IDs only. So this dummy issue was created in place of")
+    ret["body"].append("a deleted Bugzilla bug.")
+    ret["body"].append("")
+    ret["body"].append("Please ignore this report.")
+    ret["body"].append("")
+    ret["body"] = "\n".join(ret["body"])
+
+    return ret
+
+
 def github_issues_add(issues):
+    global max_bug_id
     postponed = {}
     nb_postponed = 0
-    for i in range(len(issues)):
+
+    for i in range(max_bug_id):
         id = i + 1
-        issue = issues[id]
+        if id in issues:
+            issue = issues[id]
+        else:
+            issue = dummy_issue_create(id)
+
         github_issue = github_get("issues/%d" % id)
         if github_issue:
+            # Continue if there is no issue in Bugzilla
+            if "dummy" in issue:
+                continue
             # Check if the issue was imported from the Bugzilla
             github_issue = github_issue.json()
-            if ("bugzilla bug id: %d\n" % id).lower() in github_issue["body"].lower():
+            if ("bugzilla bug id: %d\n" % id).lower() \
+                    in github_issue["body"].lower():
                 print("Issue #%d already imported, updating..." % id)
                 github_issue_update(issue)
             else:
@@ -636,34 +671,43 @@ def github_issues_add(issues):
                 postponed[id] = issue
                 nb_postponed += 1
         else:
-            print("Creating issue #%d..." % id)
+            if "dummy" in issue:
+                print("Creating DUMMY issue #%d (in place of a deleted bug)..."
+                      % id)
+            else:
+                print("Creating issue #%d..." % id)
             # Make sure the previous issue already exist
             if force_update and id > 1 and not github_issue_exist(id - 1):
-                print("Error adding issue #%d on GitHub: previous issue does not exists" \
-                    % id)
+                print("Error adding issue #%d on GitHub:"
+                      + " previous issue does not exists"
+                      % id)
                 exit(1)
             req = github_issue_append(issue)
             if force_update:
                 new_issue = github_get(req.headers["location"]).json()
                 if new_issue["number"] != id:
-                    print("Error adding issue #%d: assigned unexpected issue id #%d" \
-                        % (id, new_issue["number"]))
+                    print("Error adding issue #%d:"
+                          " assigned unexpected issue id #%d"
+                          % (id, new_issue["number"]))
                     exit(1)
                 # Update issue state
-                if issue["state"] != "open":
+                if not issue or issue["state"] != "open":
                     github_issue_update(issue)
+
     print("Done adding with %d issues postponed." % nb_postponed)
 
     return postponed
 
 
 def issue_renumber(orig_issue, new_id):
+    print("\trenumbering issue #%d to #%d..." % (orig_issue["number"], new_id))
     orig_issue["orig_number"] = orig_issue["number"]
     orig_issue["number"] = new_id
 
 
 def github_postponed_issues_add(issues, postponed):
-    id = len(issues)
+    global max_bug_id
+    id = max_bug_id
     # First check existing GitHub issues
     while True:
         id += 1
@@ -673,17 +717,20 @@ def github_postponed_issues_add(issues, postponed):
             break
         issue = github_issue_get(id)
         if not re.search(os.path.basename(__file__), issue["body"]) \
-                or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", issue["body"]):
+                or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*",
+                                 issue["body"]):
             print("\tissue #%d is not from the Bugzilla, skipping..." % id)
         else:
             bugzilla_id = re.sub(
                 r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
             if bugzilla_id:
                 bugzilla_id = int(bugzilla_id)
-                print("\tissue #%d was imported from Bugzilla (bug %d), updating..." % (id, bugzilla_id))
                 if bugzilla_id not in postponed:
-                    print("Error adding postponed issue: Bugzilla bug %d is not postponed" % bugzilla_id)
-                    exit(1)
+                    print("\tBugzilla bug %d is not postponed, skipping..."
+                          % bugzilla_id)
+                    continue
+                print("\tissue #%d was imported from Bugzilla (bug %d), updating..." % (
+                    id, bugzilla_id))
                 bugzilla_issue = postponed.pop(bugzilla_id)
                 issue_renumber(bugzilla_issue, id)
                 github_issue_update(bugzilla_issue)
@@ -692,7 +739,7 @@ def github_postponed_issues_add(issues, postponed):
                 print("\tissue #%d is not from the Bugzilla, skipping..." % id)
 
     # Now check the postponed issues and append them to the end of the issues
-    for i in range(len(issues)):
+    for i in range(max_bug_id):
         id = i + 1
         if id not in postponed:
             continue
@@ -709,11 +756,11 @@ def github_postponed_issues_add(issues, postponed):
 
 
 def args_parse(argv):
-    global force_update
+    global force_update, debug
     global xml_file, github_owner, github_repo, github_token
 
     try:
-        opts, args = getopt.getopt(argv, "hfo:r:t:x:")
+        opts, args = getopt.getopt(argv, "hfdo:r:t:x:")
     except getopt.GetoptError:
         usage()
     for opt, arg in opts:
@@ -721,9 +768,11 @@ def args_parse(argv):
             usage()
         elif opt == "-f":
             print("WARNING: the repo will be UPDATED! No backups, no undos!")
-            print("Press Ctrl+C within next 5 secons to cancel the update:")
+            print("Press Ctrl+C within next 5 seconds to cancel the update:")
             time.sleep(5)
             force_update = True
+        elif opt == "-d":
+            debug = True
         elif opt == "-o":
             github_owner = arg
         elif opt == "-r":
@@ -736,21 +785,13 @@ def args_parse(argv):
     # Check the arguments
     if (not xml_file or not github_owner or not github_repo or not github_token):
         print("Error parsing arguments: "
-              "please specify XML file, GitHub owner, repo and token")
+              + "please specify XML file, GitHub owner, repo and token")
         print()
         usage()
 
 
-def continuous_check(obj):
-    for i in range(len(obj)):
-        id = i + 1
-        if id not in obj:
-            return id
-    return 0
-
-
 def main(argv):
-    global xml_file, github_owner, github_repo
+    global xml_file, github_owner, github_repo, debug
 
     # Parse command line arguments
     args_parse(argv)
@@ -758,17 +799,12 @@ def main(argv):
     print("\tSource XML file:    %s" % xml_file)
     print("\tDest. GitHub owner: %s" % github_owner)
     print("\tDest. GitHub repo:  %s" % github_repo)
+    if debug:
+        print("\tDebug information:  on")
 
     xml_tree = xml.etree.ElementTree.parse(xml_file)
     xml_root = xml_tree.getroot()
     issues = bugs_convert(xml_root)
-
-    print("===> Checking Bugzilla bug IDs are continuous...")
-    id = continuous_check(issues)
-    if id != 0:
-        print(("Error checking continuity: bug #%d is not found in the '%s'"
-              % (id, xml_file)))
-        exit(1)
 
     print("===> Checking all the labels exist on GitHub...")
     github_labels_check(issues)

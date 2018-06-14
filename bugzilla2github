@@ -43,7 +43,7 @@ reload(sys)
 sys.setdefaultencoding('utf-8')
 
 force_update = False
-xml_file = "bugzilla-export.xml"
+xml_file = "export.xml"
 github_url = "https://api.github.com"
 github_owner = ""
 github_repo = ""

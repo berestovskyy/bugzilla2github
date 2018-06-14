@@ -26,7 +26,18 @@
 #    bugzilla2github -x export.xml -o github_owner -r github_repo -t token -f
 #
 
-import json, getopt, os, pprint, re, requests, sys, time, xml.etree.ElementTree
+from __future__ import absolute_import
+from __future__ import print_function
+import json
+import getopt
+import os
+import pprint
+import re
+import requests
+import sys
+import time
+import xml.etree.ElementTree
+from six.moves import range
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
@@ -136,16 +147,16 @@ attachment_unused_fields = [
     "token",
 ]
 
+
 def usage():
-    print "Bugzilla XML file to GitHub Issues Converter"
-    print "Usage: %s [-h] [-f]\n" \
-        "\t[-x <src XML file>]\n" \
-        "\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>\n" \
-            % os.path.basename(__file__)
-    print "Example:"
-    print "\t%s -h" % os.path.basename(__file__)
-    print "\t%s -x export.xml -o github_login -r github_repo -t access_token" \
-            % os.path.basename(__file__)
+    print("Bugzilla XML file to GitHub Issues Converter")
+    print("Usage: %s [-h] [-f]" % os.path.basename(__file__))
+    print("\t[-x <src XML file>]")
+    print("\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>")
+    print("Example:")
+    print("\t%s -h" % os.path.basename(__file__))
+    print("\t%s -x export.xml -o github_login -r github_repo -t access_token" \
+        % os.path.basename(__file__))
     exit(1)
 
 
@@ -176,7 +187,7 @@ def XML2dict(parent):
 
 def str2list(map, str):
     if str not in map:
-        print "WARNING: unable to convert %s: %s" % (map["__name__"], str)
+        print("WARNING: unable to convert %s: %s" % (map["__name__"], str))
         # Suppress further reports
         map[str] = []
 
@@ -185,7 +196,7 @@ def str2list(map, str):
 
 def str2str(map, str):
     if str not in map:
-        print "WARNING: unable to convert %s: %s" % (map["__name__"], str)
+        print("WARNING: unable to convert %s: %s" % (map["__name__"], str))
         # Suppress further reports
         map[str] = None
 
@@ -237,7 +248,7 @@ def fields_ignore(obj, fields):
 def fields_dump(obj):
     # Make sure we have converted all the fields
     for key, val in obj.items():
-        print " " * 8 + "%s[%d] = %s" % (key, len(val), val)
+        print(" " * 8 + "%s[%d] = %s" % (key, len(val), val))
 
 
 def attachment_convert(idx, attach):
@@ -245,7 +256,7 @@ def attachment_convert(idx, attach):
 
     id = attach.pop("attachid")
     ret.append("> Attached file: %s (%s, %s bytes)" % (attach.pop("filename"),
-                                        attach.pop("type"), attach.pop("size")))
+                                                       attach.pop("type"), attach.pop("size")))
     ret.append("> Description:   " + attach.pop("desc"))
 
     # Ignore some fields
@@ -253,7 +264,7 @@ def attachment_convert(idx, attach):
     fields_ignore(attach, attachment_unused_fields)
     # Make sure we have converted all the fields
     if attach:
-        print "WARNING: unconverted attachment fields:"
+        print("WARNING: unconverted attachment fields:")
         fields_dump(attach)
 
     idx[id] = "\n".join(ret)
@@ -276,7 +287,7 @@ def comment_convert(comment, attachments):
     ret.append("## Bugzilla Comment ID: " + comment.pop("commentid"))
     ret.append("Date: " + comment.pop("bug_when"))
     ret.append("From: " + email_convert(comment.pop("who"),
-                        comment.pop("who.name", None)))
+                                        comment.pop("who.name", None)))
     ret.append("")
     ret.append(comment.pop("thetext", ""))
     ret.append("")
@@ -295,7 +306,7 @@ def comment_convert(comment, attachments):
     fields_ignore(comment, comment_unused_fields)
     # Make sure we have converted all the fields
     if comment:
-        print "WARNING: unconverted comment fields:"
+        print("WARNING: unconverted comment fields:")
         fields_dump(comment)
 
     return "\n".join(ret)
@@ -316,7 +327,7 @@ def bug_convert(bug):
     ret = {}
     ret["body"] = []
     ret["body"].append("Note: the issue was created automatically with %s"
-                        % os.path.basename(__file__))
+                       % os.path.basename(__file__))
     ret["body"].append("")
     ret["labels"] = []
     ret["assignees"] = []
@@ -331,17 +342,18 @@ def bug_convert(bug):
     # Convert long_desc and attachment to comments
     ret["comments"].extend(comments_convert(bug.pop("long_desc"), attachments))
     # Convert short_desc to title
-    ret["title"] = bug.pop("short_desc")
+    ret["title"] = bug.pop("short_desc") + \
+        " (Bugzilla Bug " + str(ret["number"]) + ")"
     # Convert creation_ts to created_at
     ret["created_at"] = bug.pop("creation_ts")
     # Convert delta_ts to updated_at
     ret["updated_at"] = bug.pop("delta_ts")
     # Convert reporter to user login
     ret["user.login"] = email_convert(bug.pop("reporter"),
-                        bug.pop("reporter.name", None))
+                                      bug.pop("reporter.name", None))
     # Convert assigned_to to assignees
     ret["assignees"].append(email_convert(bug.pop("assigned_to"),
-                        bug.pop("assigned_to.name", None)))
+                                          bug.pop("assigned_to.name", None)))
     # Convert component to labels
     ret["labels"].extend(str2list(component2labels, bug.pop("component")))
     # Convert bug_status to state
@@ -352,7 +364,8 @@ def bug_convert(bug):
     ret["labels"].extend(str2list(severity2labels, bug.pop("bug_severity")))
     # Convert resolution to labels
     if "resolution" in bug:
-        ret["labels"].extend(str2list(resolution2labels, bug.pop("resolution")))
+        ret["labels"].extend(
+            str2list(resolution2labels, bug.pop("resolution")))
 
     # Create the bug description
     ret["body"].append("# Bugzilla Bug ID: %d" % ret["number"])
@@ -366,7 +379,8 @@ def bug_convert(bug):
     if "dup_id" in bug:
         ret["body"].append("Duplicates:   " + ids_convert(bug.pop("dup_id")))
     if "dependson" in bug:
-        ret["body"].append("Depends on:   " + ids_convert(bug.pop("dependson")))
+        ret["body"].append("Depends on:   " +
+                           ids_convert(bug.pop("dependson")))
     if "blocked" in bug:
         ret["body"].append("Blocker for:  " + ids_convert(bug.pop("blocked")))
     if "see_also" in bug:
@@ -387,11 +401,11 @@ def bug_convert(bug):
     fields_ignore(bug, bug_unused_fields)
     # Make sure we have converted all the fields
     if bug:
-        print "WARNING: unconverted bug fields:"
+        print("WARNING: unconverted bug fields:")
         fields_dump(bug)
     # Make sure we have converted all the attachments
     if attachments:
-        print "WARNING: unconverted attachments:"
+        print("WARNING: unconverted attachments:")
         fields_dump(attachments)
 
     return ret
@@ -405,14 +419,14 @@ def bugs_convert(xml_root):
         # Check for duplicates
         id = issue["number"]
         if id in issues:
-            print("Error checking for duplicates: bug #%d is duplicated in the '%s'"
-                            % (id, xml_file))
+            print(("Error checking for duplicates: bug #%d is duplicated in the '%s'"
+                  % (id, xml_file)))
         issues[id] = issue
 
     return issues
 
 
-def github_get(url, avs = {}):
+def github_get(url, avs={}):
     global xml_file, github_url, github_owner, github_repo, github_token
 
     if url[0] == "/":
@@ -428,10 +442,10 @@ def github_get(url, avs = {}):
     # print "GET: " + u
 
     avs["access_token"] = github_token
-    return requests.get(u, params = avs)
+    return requests.get(u, params=avs)
 
 
-def github_post(url, avs = {}, fields = []):
+def github_post(url, avs={}, fields=[]):
     global force_update
     global xml_file, github_url, github_owner, github_repo, github_token
 
@@ -444,7 +458,7 @@ def github_post(url, avs = {}, fields = []):
     # Copy fields into the data
     for field in fields:
         if field not in avs:
-            print "Error posting filed %s to %s" % (field, url)
+            print("Error posting filed %s to %s" % (field, url))
             exit(1)
         d[field] = avs[field]
 
@@ -453,26 +467,27 @@ def github_post(url, avs = {}, fields = []):
     # print "DATA: " + json.dumps(d)
 
     if force_update:
-        return requests.post(u, params = { "access_token": github_token },
-                                data = json.dumps(d))
+        return requests.post(u, params={"access_token": github_token},
+                             data=json.dumps(d))
     else:
         if not github_post.warn:
-            print "Skipping POST... (use -f to force updates)"
+            print("Skipping POST... (use -f to force updates)")
             github_post.warn = True
         return True
+
 
 github_post.warn = False
 
 
 def github_label_create(label):
     if not github_get("labels/" + label):
-        print "\tcreating label '%s' on GitHub..." % label
+        print("\tcreating label '%s' on GitHub..." % label)
         r = github_post("labels", {
             "name": label,
             "color": "0"*6,
         }, ["name", "color"])
         if not r:
-            print "Error creating label %s: %s" % (label, r.headers)
+            print("Error creating label %s: %s" % (label, r.headers))
             exit(1)
 
 
@@ -486,12 +501,12 @@ def github_labels_check(issues):
 
     for label in labels_set:
         if github_get("labels/" + label):
-            print "\tlabel '%s' exists on GitHub" % label
+            print("\tlabel '%s' exists on GitHub" % label)
         else:
             if force_update:
                 github_label_create(label)
             else:
-                print "WARNING: label '%s' does not exist on GitHub" % label
+                print("WARNING: label '%s' does not exist on GitHub" % label)
 
 
 def github_assignees_check(issues):
@@ -502,10 +517,10 @@ def github_assignees_check(issues):
 
     for assignee in a_set:
         if not github_get("/users/" + assignee):
-            print "Error checking user '%s' on GitHub" % assignee
+            print("Error checking user '%s' on GitHub" % assignee)
             exit(1)
         else:
-            print "Assignee '%s' exists" % assignee
+            print("Assignee '%s' exists" % assignee)
 
 
 def github_issue_exist(number):
@@ -518,7 +533,7 @@ def github_issue_exist(number):
 def github_issue_get(number):
     req = github_get("issues/%d" % number)
     if not req:
-        print "Error getting GitHub issue #%d: %s" % (number, req.headers)
+        print("Error getting GitHub issue #%d: %s" % (number, req.headers))
         exit(1)
 
     return req.json()
@@ -527,27 +542,27 @@ def github_issue_get(number):
 def github_issue_update(issue):
     id = issue["number"]
 
-    print "\tupdating issue #%d on GitHub..." % id
+    print("\tupdating issue #%d on GitHub..." % id)
     r = github_post("issues/%d" % id, issue,
-            ["title", "body", "state", "labels", "assignees"])
+                    ["title", "body", "state", "labels", "assignees"])
     if not r:
-        print "Error updating issue #%d on GitHub:\n%s" % (id, r.headers)
+        print("Error updating issue #%d on GitHub:\n%s" % (id, r.headers))
         exit(1)
 
 
 def github_issue_append(issue):
-    print "\tappending a new issue on GitHub..."
+    print("\tappending a new issue on GitHub...")
     r = github_post("issues", issue, ["title", "body", "labels", "assignees"])
     if not r:
-        print "Error appending an issue on GitHub:\n%s" % r.headers
+        print("Error appending an issue on GitHub:\n%s" % r.headers)
         exit(1)
     return r
 
 
 def renumbering_comment_create(orig_id, new_id):
     body = []
-    body.append("Note: the comment was created automatically with %s" \
-                    % os.path.basename(__file__))
+    body.append("Note: the comment was created automatically with %s"
+                % os.path.basename(__file__))
     body.append("")
     body.append("---")
     body.append("**Bugzilla bug ID:  %d**" % orig_id)
@@ -557,22 +572,23 @@ def renumbering_comment_create(orig_id, new_id):
     }
     return comment
 
+
 def github_comment_add(issue):
     orig_id = issue["orig_number"]
     new_id = issue["number"]
-    print "\tadding a comment to original issue #%d on GitHub..." % orig_id
+    print("\tadding a comment to original issue #%d on GitHub..." % orig_id)
     comment = renumbering_comment_create(orig_id, new_id)
     r = github_post("issues/%d/comments" % orig_id, comment, ["body"])
     if not r:
-        print "Error adding new comment to issue #%d on GitHub:\n%s" \
-                % (orig_id, r.headers)
+        print("Error adding new comment to issue #%d on GitHub:\n%s" \
+            % (orig_id, r.headers))
         exit(1)
 
 
 def github_comment_update(issue):
     orig_id = issue["orig_number"]
     new_id = issue["number"]
-    print "\tupdating comment to original issue #%d on GitHub..." % orig_id
+    print("\tupdating comment to original issue #%d on GitHub..." % orig_id)
     r = github_get("issues/%d/comments" % orig_id)
     if r:
         comments = r.json()
@@ -582,29 +598,30 @@ def github_comment_update(issue):
             if not re.search(r"(?ims).*#([0-9]+).*", comment["body"]):
                 continue
             bugzilla_id = re.sub(r"(?ims).*#([0-9]+).*", r"\1",
-                            comment["body"])
+                                 comment["body"])
             if not bugzilla_id:
                 continue
             bugzilla_id = int(bugzilla_id)
             if bugzilla_id != new_id:
                 continue
             comment_id = comment["id"]
-            print "\tupdating comment %d on GitHub..." % comment_id
+            print("\tupdating comment %d on GitHub..." % comment_id)
             comment = renumbering_comment_create(orig_id, new_id)
-            r = github_post("issues/comments/%d" % comment_id, comment, ["body"])
+            r = github_post("issues/comments/%d" %
+                            comment_id, comment, ["body"])
             if not r:
-                print "Error updating comment %d to issue #%d on GitHub:\n%s" \
-                        % (comment_id, orig_id, r.headers)
+                print("Error updating comment %d to issue #%d on GitHub:\n%s" \
+                    % (comment_id, orig_id, r.headers))
                 exit(1)
             return
-    print "\tcomment not found, adding a new one..."
+    print("\tcomment not found, adding a new one...")
     github_comment_add(issue)
 
 
 def github_issues_add(issues):
     postponed = {}
     nb_postponed = 0
-    for i in xrange(len(issues)):
+    for i in range(len(issues)):
         id = i + 1
         issue = issues[id]
         github_issue = github_get("issues/%d" % id)
@@ -612,30 +629,30 @@ def github_issues_add(issues):
             # Check if the issue was imported from the Bugzilla
             github_issue = github_issue.json()
             if ("bugzilla bug id: %d\n" % id).lower() in github_issue["body"].lower():
-                print "Issue #%d already imported, updating..." % id
+                print("Issue #%d already imported, updating..." % id)
                 github_issue_update(issue)
             else:
-                print "Issue #%d already exists, postponing..." % id
+                print("Issue #%d already exists, postponing..." % id)
                 postponed[id] = issue
                 nb_postponed += 1
         else:
-            print "Creating issue #%d..." % id
+            print("Creating issue #%d..." % id)
             # Make sure the previous issue already exist
             if force_update and id > 1 and not github_issue_exist(id - 1):
-                print "Error adding issue #%d on GitHub: previous issue does not exists" \
-                        % id
+                print("Error adding issue #%d on GitHub: previous issue does not exists" \
+                    % id)
                 exit(1)
             req = github_issue_append(issue)
             if force_update:
                 new_issue = github_get(req.headers["location"]).json()
                 if new_issue["number"] != id:
-                    print "Error adding issue #%d: assigned unexpected issue id #%d" \
-                        % (id, new_issue["number"])
+                    print("Error adding issue #%d: assigned unexpected issue id #%d" \
+                        % (id, new_issue["number"]))
                     exit(1)
                 # Update issue state
                 if issue["state"] != "open":
                     github_issue_update(issue)
-    print "Done adding with %d issues postponed." % nb_postponed
+    print("Done adding with %d issues postponed." % nb_postponed)
 
     return postponed
 
@@ -650,36 +667,37 @@ def github_postponed_issues_add(issues, postponed):
     # First check existing GitHub issues
     while True:
         id += 1
-        print "Checking issue #%d on GitHub..." % id
+        print("Checking issue #%d on GitHub..." % id)
         if not github_issue_exist(id):
-            print "\tissue #%d does not exist, breaking..." % id
+            print("\tissue #%d does not exist, breaking..." % id)
             break
         issue = github_issue_get(id)
         if not re.search(os.path.basename(__file__), issue["body"]) \
-            or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", issue["body"]):
-            print "\tissue #%d is not from the Bugzilla, skipping..." % id
+                or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", issue["body"]):
+            print("\tissue #%d is not from the Bugzilla, skipping..." % id)
         else:
-            bugzilla_id = re.sub(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
+            bugzilla_id = re.sub(
+                r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
             if bugzilla_id:
                 bugzilla_id = int(bugzilla_id)
-                print "\tissue #%d was imported from Bugzilla (bug %d), updating..." % (id, bugzilla_id)
+                print("\tissue #%d was imported from Bugzilla (bug %d), updating..." % (id, bugzilla_id))
                 if bugzilla_id not in postponed:
-                    print "Error adding postponed issue: Bugzilla bug %d is not postponed" % bugzilla_id
+                    print("Error adding postponed issue: Bugzilla bug %d is not postponed" % bugzilla_id)
                     exit(1)
                 bugzilla_issue = postponed.pop(bugzilla_id)
                 issue_renumber(bugzilla_issue, id)
                 github_issue_update(bugzilla_issue)
                 github_comment_update(bugzilla_issue)
             else:
-                print "\tissue #%d is not from the Bugzilla, skipping..." % id
+                print("\tissue #%d is not from the Bugzilla, skipping..." % id)
 
     # Now check the postponed issues and append them to the end of the issues
-    for i in xrange(len(issues)):
+    for i in range(len(issues)):
         id = i + 1
         if id not in postponed:
             continue
         issue = postponed.pop(id)
-        print "Appending postponed issue #%d on GitHub..." % id
+        print("Appending postponed issue #%d on GitHub..." % id)
         req = github_issue_append(issue)
         if force_update:
             new_issue = github_get(req.headers["location"]).json()
@@ -695,15 +713,15 @@ def args_parse(argv):
     global xml_file, github_owner, github_repo, github_token
 
     try:
-        opts, args = getopt.getopt(argv,"hfo:r:t:x:")
+        opts, args = getopt.getopt(argv, "hfo:r:t:x:")
     except getopt.GetoptError:
         usage()
     for opt, arg in opts:
         if opt == '-h':
             usage()
         elif opt == "-f":
-            print "WARNING: the repo will be UPDATED! No backups, no undos!"
-            print "Press Ctrl+C within next 5 secons to cancel the update:"
+            print("WARNING: the repo will be UPDATED! No backups, no undos!")
+            print("Press Ctrl+C within next 5 secons to cancel the update:")
             time.sleep(5)
             force_update = True
         elif opt == "-o":
@@ -718,12 +736,13 @@ def args_parse(argv):
     # Check the arguments
     if (not xml_file or not github_owner or not github_repo or not github_token):
         print("Error parsing arguments: "
-                "please specify XML file, GitHub owner, repo and token")
+              "please specify XML file, GitHub owner, repo and token")
+        print()
         usage()
 
 
 def continuous_check(obj):
-    for i in xrange(len(obj)):
+    for i in range(len(obj)):
         id = i + 1
         if id not in obj:
             return id
@@ -735,32 +754,32 @@ def main(argv):
 
     # Parse command line arguments
     args_parse(argv)
-    print "===> Converting Bugzilla reports to GitHub Issues..."
-    print "\tSource XML file:    %s" % xml_file
-    print "\tDest. GitHub owner: %s" % github_owner
-    print "\tDest. GitHub repo:  %s" % github_repo
+    print("===> Converting Bugzilla reports to GitHub Issues...")
+    print("\tSource XML file:    %s" % xml_file)
+    print("\tDest. GitHub owner: %s" % github_owner)
+    print("\tDest. GitHub repo:  %s" % github_repo)
 
     xml_tree = xml.etree.ElementTree.parse(xml_file)
     xml_root = xml_tree.getroot()
     issues = bugs_convert(xml_root)
 
-    print "===> Checking Bugzilla bug IDs are continuous..."
+    print("===> Checking Bugzilla bug IDs are continuous...")
     id = continuous_check(issues)
     if id != 0:
-        print("Error checking continuity: bug #%d is not found in the '%s'"
-                            % (id, xml_file))
+        print(("Error checking continuity: bug #%d is not found in the '%s'"
+              % (id, xml_file)))
         exit(1)
 
-    print "===> Checking all the labels exist on GitHub..."
+    print("===> Checking all the labels exist on GitHub...")
     github_labels_check(issues)
-    print "===> Checking all the assignees exist on GitHub..."
+    print("===> Checking all the assignees exist on GitHub...")
     github_assignees_check(issues)
 
-    print "===> Adding Bugzilla reports on GitHub preserving IDs..."
+    print("===> Adding Bugzilla reports on GitHub preserving IDs...")
     postponed = github_issues_add(issues)
-    print "===> Appending postponed Bugzilla reports on GitHub with new IDs..."
+    print("===> Appending postponed Bugzilla reports on GitHub with new IDs...")
     github_postponed_issues_add(issues, postponed)
-    print "===> All done."
+    print("===> All done.")
 
 
 if __name__ == "__main__":

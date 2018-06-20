@@ -20,10 +20,10 @@
 #    - save the generated token
 #
 # 3. Run the migration script and check all the warnings:
-#    bugzilla2github -x export.xml -o github_owner -r github_repo -t token
+#    bugzilla2github -x export.xml -o GITHUB_OWNER -r GITHUB_REPO -t TOKEN
 #
 # 4. Run the migration script again and force the updates:
-#    bugzilla2github -x export.xml -o github_owner -r github_repo -t token -f
+#    bugzilla2github -x export.xml -o GITHUB_OWNER -r GITHUB_REPO -t TOKEN -f
 #
 
 from __future__ import absolute_import
@@ -43,32 +43,51 @@ from six.moves import range
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
-force_update = False
-debug = False
-max_bug_id = 0
-xml_file = "export.xml"
-# Please see https://developer.github.com/v3/issues/
-github_url = "https://api.github.com"
-github_owner = ""
-github_repo = ""
-github_token = ""
+########################################################################
+## Global variables
+########################################################################
 
-email2login = {
+# Script name, i.e. bugzilla2github
+NAME = os.path.basename(__file__)
+# This signature is used to detect if the bug was imported from Bugzilla
+# The signature follows with the bug id, i.e. an integer number.
+BUG_SIGNATURE = "Bugzilla Bug "
+DELETED_BUG_SIGNATURE = "Deleted Bugzilla Bug"
+# Do the actual changes, i.e. post to GitHub
+FORCE_UPDATES = False
+# Print some debug info
+DEBUG = False
+# Default XML file with Bugzilla export
+XML_FILE = "export.xml"
+# GitHub REST API URL
+# See https://developer.github.com/v3/issues/
+GITHUB_API = "https://api.github.com"
+# GitHub repository owner, i.e. username
+GITHUB_OWNER = ""
+# GitHub repository name
+GITHUB_REPO = ""
+# GitHub access token
+GITHUB_TOKEN = ""
+
+# Global convertion dictionaries
+EMAIL2LOGIN = {
     "__name__": "email to GitHub login",
     "123@example.com": "login",
+    "email@example.org": "berestovskyy",
 }
-status2state = {
+STATUS2STATE = {
     "__name__": "status to GitHub state",
     "CONFIRMED": "open",
     "IN_PROGRESS": "open",
     "RESOLVED": "closed",
 }
-component2labels = {
+COMPONENT2LABELS = {
     "__name__": "component to GitHub labels",
+    "Features": ["enhancement"],
     "Testing": ["tests"],
     "Documentation": ["docs"],
 }
-priority2labels = {
+PRIORITY2LABELS = {
     "__name__": "priority to GitHub labels",
     "Lowest": ["low priority"],
     "Low": ["low priority"],
@@ -77,7 +96,7 @@ priority2labels = {
     "High": ["high priority"],
     "Highest": ["high priority"],
 }
-severity2labels = {
+SEVERITY2LABELS = {
     "__name__": "severity to GitHub labels",
     "enhancement": ["enhancement"],
     "trivial": ["minor", "bug"],
@@ -87,13 +106,13 @@ severity2labels = {
     "critical": ["major", "bug"],
     "blocker": ["major", "bug"],
 }
-resolution2labels = {
+RESOLUTION2LABELS = {
     "__name__": "resolution to GitHub labels",
     "FIXED": [],
     "INVALID": ["invalid"],
     "DUPLICATE": ["duplicate"],
 }
-bug_unused_fields = [
+BUG_UNUSED_FIELDS = [
     "actual_time",
     "attachment.isobsolete",
     "attachment.ispatch",
@@ -114,10 +133,10 @@ bug_unused_fields = [
     "token",
     "version",
 ]
-comment_unused_fields = [
+COMMENT_UNUSED_FIELDS = [
     "comment_count",
 ]
-attachment_unused_fields = [
+ATTACHMENT_UNUSED_FIELDS = [
     "attacher",
     "attacher.name",
     "date",
@@ -126,365 +145,299 @@ attachment_unused_fields = [
 ]
 
 
-def usage():
-    print("Bugzilla XML file to GitHub Issues Converter")
-    print("Usage: %s [-h] [-f] [-d]" % os.path.basename(__file__))
-    print("\t[-x <src XML file>]")
-    print("\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>")
-    print("Where:")
-    print("\t-h  usage information")
-    print("\t-f  force updates (actually write the changes)")
-    print("\t-d  print debug information")
-    print("Example:")
-    print("\t%s -h" % os.path.basename(__file__))
-    print("\t%s -x export.xml -o github_login -r github_repo -t access_token"
-          % os.path.basename(__file__))
-    exit(1)
+########################################################################
+## GitHub API functions
+########################################################################
 
 
-def XML2dict(parent):
-    global debug
-    ret = {}
+def github_issues_add(issues):
+    """
+    Adds dictionary of converted issues to GitHub Issue tracker,
+    i.e. this is the main script logic.
 
-    for key in parent:
-        if debug:
-            print(len(key), key.tag, key.attrib, key.text)
-
-        if len(key) > 0:
-            val = XML2dict(key)
-        else:
-            val = key.text
-        if key.text:
-            if key.tag not in ret:
-                ret[key.tag] = val
+    Args:
+        issues: Dictionary of issues converted from Bugzilla export.
+    """
+    id = 0
+    while issues:
+        id += 1
+        print("Checking GitHub issue #%d..." % id)
+        github_issue = github_issue_get(id)
+        if github_issue:
+            bug_id = bug_id_parse(github_issue["body"])
+            if bug_id > 0:
+                print("\tissue #%d is the Bug %d, updating..." % (id, bug_id))
+                issue = issues.pop(bug_id, None)
+                github_issue_update(id, issue)
+            elif bug_id == 0:
+                print("\tissue #%d is a deleted Bugzilla Bug, updating...")
+                issue = new_issue(id, True)
+                github_issue_update(id, issue)
             else:
-                if isinstance(ret[key.tag], list):
-                    ret[key.tag].append(val)
+                print("\tissue #%d already exists on GitHub, skipping..." % id)
+                continue
+        else:
+            # Try to add Bug id to the same #id
+            issue = issues.pop(id, None)
+            if issue:
+                print("\tadding Bugzilla Bug %d as GitHub issue #%d..."
+                      % (id, id))
+            else:
+                # Or just add a next issue
+                first_id = sorted(issues)[0]
+                if first_id > id:
+                    # We are not there yet, just add a dummy
+                    print("\tadding a dummy (deleted) bug as #%d..." % id)
+                    issue = new_issue(id, True)
                 else:
-                    ret[key.tag] = [ret[key.tag], val]
-        # Parse attributes
-        for name, val in key.items():
-            ret["%s.%s" % (key.tag, name)] = val
-
-    return ret
-
-
-def str2list(map, str):
-    if str not in map:
-        print("WARNING: unable to convert %s: %s" % (map["__name__"], str))
-        # Suppress further reports
-        map[str] = []
-
-    return map[str]
+                    # Otherwise, just add postponed issue
+                    print("\trenumbering Bugzilla Bug %d to GitHub issue #%d..."
+                          % (first_id, id))
+                    issue = issues.pop(first_id)
+            # Note: appending an issue does not guarantee it will become #id
+            github_issue_add(id, issue)
 
 
-def str2str(map, str):
-    if str not in map:
-        print("WARNING: unable to convert %s: %s" % (map["__name__"], str))
-        # Suppress further reports
-        map[str] = None
+def github_issue_get(id):
+    """
+    Gets issue #id from GitHub.
 
-    return map[str]
+    Args:
+        id: GitHub #id to get.
 
-
-def ids_convert(ids):
-    ret = []
-
-    if not ids:
-        return ""
-    if isinstance(ids, list):
-        for id in ids:
-            ret.append("#" + id)
+    Returns:
+        A json-encoded issue or None if issue #id does not exist on GitHub.
+    """
+    req = github_get("issues/%d" % id)
+    if req:
+        return req.json()
     else:
-        ret.append("#" + ids)
-
-    return ", ".join(ret)
+        return None
 
 
-def email_convert(email, name):
-    ret = str2str(email2login, email)
-    if ret:
-        return "@" + ret
-    else:
-        if name and not name.find("@") >= 0:
-            return "%s &lt;<%s>&gt;" % (name, email)
-        else:
-            return email
+def github_issue_update(id, issue):
+    """
+    Updates issue #id on GitHub.
+
+    Args:
+        id: GitHub #id to update.
+        issue: Converted Bugzilla Bug to be updated.
+
+    Returns:
+        A response object on success or exits with error otherwise.
+    """
+    print("\tupdating issue #%d on GitHub..." % id)
+    if not issue:
+        print("Error updating #%d: Bugzilla Bug is missing" % id)
+        exit(1)
+
+    r = github_post("issues/%d" % id, issue,
+                    ["title", "body", "state", "labels", "assignees"])
+    if not r:
+        print("Error updating issue #%d on GitHub:\n%s" % (id, r.headers))
+        exit(1)
+
+    orig_id = issue["id"]
+    if id != orig_id:
+        github_comment_update(orig_id, id)
 
 
-def emails_convert(emails):
-    ret = []
-    if isinstance(emails, list):
-        for email in emails:
-            ret.append(email_convert(email, None))
-    else:
-        ret.append(email_convert(emails, None))
+def github_issue_add(id, issue):
+    """
+    Adds issue #id to GitHub. GitHub does not allow direct issue id
+    assignment, so prior to call this function, a previous issue (i.e. issue
+    #id-1) MUST exist on GitHub and the issue to add (i.e. issue #id) MUST NOT exist on GitHub.
 
-    return ret
+    Still, if someone in parallel adds an issue on GitHub, there is
+    no guarantee the newly added issue will be added as #id.
 
+    Please make sure no one else is modifying the issues at the same time
+    you run this script!
 
-def fields_ignore(obj, fields):
-    # Ignore some Bugzilla fields
-    for field in fields:
-        obj.pop(field, None)
+    Args:
+        is: GitHub #id to be added.
+            Note: GitHub does not allow to add a specific #id, so this #id
+                  MUST not exist on GitHub
+        issue: Converted Bugzilla Bug to be added.
+    """
+    print("\tadding a new issue #%d on GitHub..." % id)
+    # Note: this still does not guarantee the new issue will be added as #id
+    r = github_post("issues", issue, ["title", "body", "labels", "assignees"])
+    if not r:
+        print("Error adding a new issue on GitHub:\n%s" % r.headers)
+        exit(1)
 
+    if FORCE_UPDATES:
+        # Make sure the issue is added as #id
+        github_issue = github_issue_get(id)
+        if not github_issue:
+            print("Error adding issue: issue %d does not exist" % id)
+            exit(1)
+        bug_id = bug_id_parse(github_issue["body"])
+        if bug_id and bug_id != issue["id"]:
+            print("Error adding issue: issue %d is not %d"
+                  % (bug_id, issue["id"]))
+            exit(1)
 
-def fields_dump(obj):
-    # Make sure we have converted all the fields
-    for key, val in obj.items():
-        print(" " * 8 + "%s[%d] = %s" % (key, len(val), val))
+    # Default state for the newly created issues is open, so we need to update
+    # the state and the renumbering comment.
+    github_issue_update(id, issue)
 
-
-def attachment_convert(idx, attach):
-    ret = []
-
-    id = attach.pop("attachid")
-    ret.append("> Attached file: %s (%s, %s bytes)"
-               % (attach.pop("filename"),
-                  attach.pop("type"),
-                  attach.pop("size")))
-    ret.append("> Description:   " + attach.pop("desc"))
-
-    # Ignore some fields
-    global attachment_unused_fields
-    fields_ignore(attach, attachment_unused_fields)
-    # Make sure we have converted all the fields
-    if attach:
-        print("WARNING: unconverted attachment fields:")
-        fields_dump(attach)
-
-    idx[id] = "\n".join(ret)
-
-
-def attachments_convert(attachments):
-    ret = {}
-    if isinstance(attachments, list):
-        for attachment in attachments:
-            attachment_convert(ret, attachment)
-    else:
-        attachment_convert(ret, attachments)
-
-    return ret
+    return r
 
 
-def comment_convert(comment, attachments):
-    ret = []
+def github_get(url, dict={}):
+    """
+    Sends GET request to GitHub or a specified URL.
 
-    ret.append("## Bugzilla Comment ID: " + comment.pop("commentid"))
-    ret.append("Date: " + comment.pop("bug_when"))
-    ret.append("From: " + email_convert(comment.pop("who"),
-                                        comment.pop("who.name", None)))
-    ret.append("")
-    ret.append(comment.pop("thetext", ""))
-    ret.append("")
-    # Convert attachments if any
-    if "attachid" in comment:
-        ret.append(attachments.pop(comment.pop("attachid")))
-        ret.append("")
-    ret.append("")
+    Args:
+        url: A string with an URL to get. The URL might start with:
+             '/' -- the request is sent to main GitHub API URL + url string
+             'http://' or 'https://' -- the request is sent to the specified url
+             otherwise the request is sent to:
+                GitHub API URL + /repos/ + GitHub Owner + GitHub Repo + url
+        dict: An optional dictionary to be sent in the query.
 
-    # Syntax: convert "bug id" to "bug #id"
-    for i, val in enumerate(ret):
-        ret[i] = re.sub(r"(?i)(bug)\s+([0-9]+)", r"\1 #\2", val)
-
-    # Ignore some comment fields
-    global comment_unused_fields
-    fields_ignore(comment, comment_unused_fields)
-    # Make sure we have converted all the fields
-    if comment:
-        print("WARNING: unconverted comment fields:")
-        fields_dump(comment)
-
-    return "\n".join(ret)
-
-
-def comments_convert(comments, attachments):
-    ret = []
-    if isinstance(comments, list):
-        for comment in comments:
-            ret.append(comment_convert(comment, attachments))
-    else:
-        ret.append(comment_convert(comments, attachments))
-
-    return ret
-
-
-def bug_convert(bug):
-    ret = {}
-    ret["body"] = []
-    ret["body"].append("Note: the issue was created automatically with %s"
-                       % os.path.basename(__file__))
-    ret["body"].append("")
-    ret["labels"] = []
-    ret["assignees"] = []
-    ret["comments"] = []
-    attachments = {}
-
-    # Convert bug_id to number
-    ret["number"] = int(bug.pop("bug_id"))
-    # Convert attachments if any
-    if "attachment" in bug:
-        attachments = attachments_convert(bug.pop("attachment"))
-    # Convert long_desc and attachment to comments
-    ret["comments"].extend(comments_convert(bug.pop("long_desc"), attachments))
-    # Convert short_desc to title
-    ret["title"] = "%s (Bugzilla Bug %d)" \
-        % (bug.pop("short_desc"), ret["number"])
-    # Convert creation_ts to created_at
-    ret["created_at"] = bug.pop("creation_ts")
-    # Convert delta_ts to updated_at
-    ret["updated_at"] = bug.pop("delta_ts")
-    # Convert reporter to user login
-    ret["user.login"] = email_convert(bug.pop("reporter"),
-                                      bug.pop("reporter.name", None))
-    # Convert assigned_to to assignees
-    ret["assignees"].append(email_convert(bug.pop("assigned_to"),
-                                          bug.pop("assigned_to.name", None)))
-    # Convert component to labels
-    ret["labels"].extend(str2list(component2labels, bug.pop("component")))
-    # Convert bug_status to state
-    ret["state"] = str2str(status2state, bug.pop("bug_status"))
-    # Convert priority to labels
-    ret["labels"].extend(str2list(priority2labels, bug.pop("priority")))
-    # Convert severity to labels
-    ret["labels"].extend(str2list(severity2labels, bug.pop("bug_severity")))
-    # Convert resolution to labels
-    if "resolution" in bug:
-        ret["labels"].extend(
-            str2list(resolution2labels, bug.pop("resolution")))
-
-    # Create the bug description
-    ret["body"].append("# Bugzilla Bug ID: %d" % ret["number"])
-    ret["body"].append("Date: " + ret["created_at"])
-    ret["body"].append("From: " + ret["user.login"])
-    ret["body"].append("To:   " + ", ".join(ret["assignees"]))
-    if "cc" in bug:
-        ret["body"].append("CC:   " + ", ".join(emails_convert(bug.pop("cc"))))
-    # Extra information
-    ret["body"].append("")
-    if "dup_id" in bug:
-        ret["body"].append("Duplicates:   " + ids_convert(bug.pop("dup_id")))
-    if "dependson" in bug:
-        ret["body"].append("Depends on:   " +
-                           ids_convert(bug.pop("dependson")))
-    if "blocked" in bug:
-        ret["body"].append("Blocker for:  " + ids_convert(bug.pop("blocked")))
-    if "see_also" in bug:
-        if isinstance(bug["see_also"], list):
-            for see_also in bug.pop("see_also"):
-                ret["body"].append("See also:     " + see_also)
-        else:
-            ret["body"].append("See also:     " + bug.pop("see_also"))
-    ret["body"].append("Last updated: " + ret["updated_at"])
-    ret["body"].append("")
-
-    # Put everything together
-    ret["body"] = "\n".join(ret["body"]) + "\n\n" + "\n".join(ret["comments"])
-    ret["assignees"] = [a[1:] for a in ret["assignees"] if a[0] == "@"]
-
-    # Ignore some bug fields
-    global bug_unused_fields
-    fields_ignore(bug, bug_unused_fields)
-    # Make sure we have converted all the fields
-    if bug:
-        print("WARNING: unconverted bug fields:")
-        fields_dump(bug)
-    # Make sure we have converted all the attachments
-    if attachments:
-        print("WARNING: unconverted attachments:")
-        fields_dump(attachments)
-
-    return ret
-
-
-def bugs_convert(xml_root):
-    global max_bug_id
-
-    issues = {}
-    for xml_bug in xml_root.iter("bug"):
-        bug = XML2dict(xml_bug)
-        issue = bug_convert(bug)
-        # Check for duplicates
-        id = issue["number"]
-        if id in issues:
-            print("Error checking for duplicates:"
-                  " bug #%d is duplicated in the '%s'"
-                  % (id, xml_file))
-        issues[id] = issue
-        max_bug_id = max(max_bug_id, int(id))
-
-    return issues
-
-
-def github_get(url, avs={}):
-    global xml_file, github_url, github_owner, github_repo, github_token
-    global debug
-
+    Returns:
+        A response object.
+    """
     if url[0] == "/":
-        u = "%s%s" % (github_url, url)
+        u = GITHUB_API + url
     elif url.startswith("https://"):
         u = url
     elif url.startswith("http://"):
         u = url
     else:
-        u = "%s/repos/%s/%s/%s" % (github_url, github_owner, github_repo, url)
+        u = "%s/repos/%s/%s/%s" % (GITHUB_API, GITHUB_OWNER, GITHUB_REPO, url)
 
-    if debug:
+    if DEBUG:
         print("GET: " + u)
 
-    avs["access_token"] = github_token
-    return requests.get(u, params=avs)
+    dict["access_token"] = GITHUB_TOKEN
+    return requests.get(u, params=dict)
 
 
-def github_post(url, avs={}, fields=[]):
-    global force_update, debug
-    global xml_file, github_url, github_owner, github_repo, github_token
+def github_post(url, dict={}, fields=[]):
+    """
+    Sends POST request to a specified URL. If global flag FORCE_UPDATES
+    is not set, the function prints a warning and just returns True.
 
+    Args:
+        url: A string with an URL to post. The URL might start with:
+             '/' -- the request is sent to main GitHub API URL + url string
+             otherwise the request is sent to:
+                GitHub API URL + /repos/ + GitHub Owner + GitHub Repo + url
+        dict: An optional dictionary to be sent in the query.
+        fields: An optional list of fields to send from the dictionary.
+
+    Returns:
+        A response object. If the global flag FORCE_UPDATES is not set, always
+        returns True.
+    """
     if url[0] == "/":
-        u = "%s%s" % (github_url, url)
+        u = "%s%s" % (GITHUB_API, url)
     else:
-        u = "%s/repos/%s/%s/%s" % (github_url, github_owner, github_repo, url)
+        u = "%s/repos/%s/%s/%s" % (GITHUB_API, GITHUB_OWNER, GITHUB_REPO, url)
 
     d = {}
     # Copy fields into the data
     for field in fields:
-        if field not in avs:
+        if field not in dict:
             print("Error posting filed %s to %s" % (field, url))
             exit(1)
-        d[field] = avs[field]
+        d[field] = dict[field]
 
-    if debug:
+    if DEBUG:
         print("POST: " + u)
         print("DATA: " + json.dumps(d))
 
-    if force_update:
-        return requests.post(u, params={"access_token": github_token},
+    if FORCE_UPDATES:
+        return requests.post(u, params={"access_token": GITHUB_TOKEN},
                              data=json.dumps(d))
     else:
-        if not github_post.warn:
+        if not github_post.POST_WARNING_PRINTED:
             print("Skipping POST... (use -f to force updates)")
-            github_post.warn = True
+            github_post.POST_WARNING_PRINTED = True
         return True
 
 
-github_post.warn = False
+# A flag if the post warning has been printed
+github_post.POST_WARNING_PRINTED = False
+
+
+def github_comment_add(orig_id, new_id):
+    """
+    Adds a comment to Github #orig_id that Bugzilla Bug is now at #new_id.
+
+    Args:
+        orig_id: Original Bugzilla Bug id.
+        new_id: Newly assigned GitHub Issue #id.
+    """
+    print("\tadding a comment to issue #%d on GitHub..." % orig_id)
+    comment = new_renumber_comment(orig_id, new_id)
+    r = github_post("issues/%d/comments" % orig_id, comment, ["body"])
+    if not r:
+        print("Error adding new comment to issue #%d on GitHub:\n%s"
+              % (orig_id, r.headers))
+        exit(1)
+
+
+def github_comment_update(orig_id, new_id):
+    """
+    Updates a comment on Github #orig_id that Bugzilla Bug is now at #new_id.
+
+    Args:
+        orig_id: Original Bugzilla Bug id.
+        new_id: Newly assigned GitHub Issue #id.
+    """
+    print("\tupdating comment on GitHub issue #%d..." % orig_id)
+    r = github_get("issues/%d/comments" % orig_id)
+    if r:
+        comments = r.json()
+        for comment in comments:
+            bug_id = bug_id_parse(comment["body"])
+            if not bug_id:
+                continue
+            comment_id = int(comment["id"])
+            print("\tupdating comment %d on GitHub issue #%d..."
+                  % (comment_id, orig_id))
+            comment = new_renumber_comment(orig_id, new_id)
+            r = github_post("issues/comments/%d" %
+                            comment_id, comment, ["body"])
+            if not r:
+                print("Error updating comment %d on GitHub issue #%d:\n%s"
+                      % (comment_id, orig_id, r.headers))
+                exit(1)
+            return
+    print("\tno comment found on #%d, adding a new one..." % orig_id)
+    github_comment_add(orig_id, new_id)
 
 
 def github_label_create(label):
-    if not github_get("labels/" + label):
-        print("\tcreating label '%s' on GitHub..." % label)
-        r = github_post("labels", {
-            "name": label,
-            "color": "0"*6,
-        }, ["name", "color"])
-        if not r:
-            print("Error creating label %s: %s" % (label, r.headers))
-            exit(1)
+    """
+    Creates a new label on GitHub.
+
+    Args:
+        label: String with new label name.
+    """
+    print("\tcreating label '%s' on GitHub..." % label)
+    r = github_post("labels", {
+        "name": label,
+        "color": "0"*6,
+    }, ["name", "color"])
+    if not r:
+        print("Error creating label %s: %s" % (label, r.headers))
+        exit(1)
 
 
-def github_labels_check(issues):
-    global force_update
+def github_labels_create(issues):
+    """
+    Checks if all the labels assigned to all the issues are on GitHub.
+    If FORCE_UPDATES flag is set, creates the missing labels.
 
+    Args:
+        issues: A dictionary of converted Bugzilla reports.
+    """
     labels_set = set()
     for id in issues:
         for label in issues[id]["labels"]:
@@ -494,13 +447,17 @@ def github_labels_check(issues):
         if github_get("labels/" + label):
             print("\tlabel '%s' exists on GitHub" % label)
         else:
-            if force_update:
-                github_label_create(label)
-            else:
-                print("WARNING: label '%s' does not exist on GitHub" % label)
+            print("WARNING: label '%s' does not exist on GitHub" % label)
+            github_label_create(label)
 
 
 def github_assignees_check(issues):
+    """
+    Checks if all the users assigned to all the issues are on GitHub.
+
+    Args:
+        issues: A dictionary of converted Bugzilla reports.
+    """
     a_set = set()
     for id in issues:
         for assignee in issues[id]["assignees"]:
@@ -511,253 +468,431 @@ def github_assignees_check(issues):
             print("Error checking user '%s' on GitHub" % assignee)
             exit(1)
         else:
-            print("Assignee '%s' exists" % assignee)
+            print("\tassignee '%s' exists on GitHub" % assignee)
 
 
-def github_issue_exist(number):
-    if github_get("issues/%d" % number):
-        return True
+########################################################################
+## XML parsing and conversion functions
+########################################################################
+
+
+def XML2bug(parent):
+    """
+    Converts XML nodes to a new Bugzilla bug report dictionary.
+
+    Args:
+        parent: A parent XML node to start the conversion.
+
+    Returns:
+        A new dictionary containing Bugzilla bug report.
+    """
+    issue = {}
+
+    for key in parent:
+        if DEBUG:
+            print(len(key), key.tag, key.attrib, key.text)
+
+        if len(key) > 0:
+            val = XML2bug(key)
+        else:
+            val = key.text
+        if key.text:
+            if key.tag not in issue:
+                issue[key.tag] = val
+            else:
+                if isinstance(issue[key.tag], list):
+                    issue[key.tag].append(val)
+                else:
+                    issue[key.tag] = [issue[key.tag], val]
+        # Parse attributes
+        for name, val in key.items():
+            issue["%s.%s" % (key.tag, name)] = val
+
+    return issue
+
+
+def str2list(map, str):
+    """Lookups in the map specific string and returns it as a list."""
+    if str not in map:
+        print("WARNING: unable to convert %s: %s" % (map["__name__"], str))
+        # Suppress further reports
+        map[str] = []
+
+    return map[str]
+
+
+def ids2ids(ids):
+    """Converts Bugzilla bug report ids to issues #ids."""
+    issue = []
+
+    if not ids:
+        return ""
+    if isinstance(ids, list):
+        for id in ids:
+            issue.append("#" + id)
     else:
-        return False
+        issue.append("#" + ids)
+
+    return ", ".join(issue)
 
 
-def github_issue_get(number):
-    req = github_get("issues/%d" % number)
-    if not req:
-        print("Error getting GitHub issue #%d: %s" % (number, req.headers))
-        exit(1)
-
-    return req.json()
-
-
-def github_issue_update(issue):
-    id = issue["number"]
-
-    print("\tupdating issue #%d on GitHub..." % id)
-    r = github_post("issues/%d" % id, issue,
-                    ["title", "body", "state", "labels", "assignees"])
-    if not r:
-        print("Error updating issue #%d on GitHub:\n%s" % (id, r.headers))
-        exit(1)
+def email2login(email, name):
+    """Converts email to a GitHub user login string."""
+    issue = str2list(EMAIL2LOGIN, email)
+    if issue:
+        return "@" + issue
+    else:
+        if name and not name.find("@") >= 0:
+            return "%s &lt;<%s>&gt;" % (name, email)
+        else:
+            return email
 
 
-def github_issue_append(issue):
-    print("\tappending a new issue on GitHub...")
-    r = github_post("issues", issue, ["title", "body", "labels", "assignees"])
-    if not r:
-        print("Error appending an issue on GitHub:\n%s" % r.headers)
-        exit(1)
-    return r
+def emails2logins(emails):
+    """Converts an email or a list of emails to a string."""
+    issue = []
+    if isinstance(emails, list):
+        for email in emails:
+            issue.append(email2login(email, None))
+    else:
+        issue.append(email2login(emails, None))
+    return ", ".join(issue)
 
 
-def renumbering_comment_create(orig_id, new_id):
+def fields_ignore(obj, fields):
+    """Ignores (removes) all the fields in the objects."""
+    # Ignore some Bugzilla fields
+    for field in fields:
+        obj.pop(field, None)
+
+
+def fields_dump(obj):
+    """Dumps all the fields in the object."""
+    # Make sure we have converted all the fields
+    for key, val in obj.items():
+        print("\t%s[%d] = %s" % (key, len(val), val))
+
+
+def attachment2str(idx, attach):
+    """Converts Bugzilla attachment to a string."""
+    issue = []
+
+    id = attach.pop("attachid")
+    issue.append("> Attached file: %s (%s, %s bytes)"
+                 % (attach.pop("filename"),
+                    attach.pop("type"),
+                    attach.pop("size")))
+    issue.append("> Description:   " + attach.pop("desc"))
+
+    # Ignore some fields
+    fields_ignore(attach, ATTACHMENT_UNUSED_FIELDS)
+    # Make sure we have converted all the fields
+    if attach:
+        print("WARNING: unconverted attachment fields:")
+        fields_dump(attach)
+
+    idx[id] = "\n".join(issue)
+
+
+def attachments2dict(attachments):
+    """Converts Bugzilla attachments to a dictionary of strings."""
+    issue = {}
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            attachment2str(issue, attachment)
+    else:
+        attachment2str(issue, attachments)
+
+    return issue
+
+
+def comment2str(comment, attachments):
+    """Converts Bugzilla comment to a string."""
+    ret = []
+
+    ret.extend([
+        "## Comment " + comment.pop("commentid"),
+        "Date: " + comment.pop("bug_when"),
+        "From: " + email2login(comment.pop("who"),
+                               comment.pop("who.name", None)),
+        "",
+        comment.pop("thetext", ""),
+        "",
+    ])
+    # Convert attachments if any
+    if "attachid" in comment:
+        ret.extend([
+            attachments.pop(comment.pop("attachid")),
+            ""
+        ])
+    ret.append("")
+
+    # Syntax: convert "bug id" to "bug #id"
+    for i, val in enumerate(ret):
+        ret[i] = re.sub(r"(?i)(bug)\s+([0-9]+)", r"\1 #\2", val)
+
+    # Ignore some comment fields
+    fields_ignore(comment, COMMENT_UNUSED_FIELDS)
+    # Make sure we have converted all the fields
+    if comment:
+        print("WARNING: unconverted comment fields:")
+        fields_dump(comment)
+
+    return "\n".join(ret)
+
+
+def comments2list(comments, attachments):
+    """Converts Bugzilla comments to a list of strings."""
+    issue = []
+    if isinstance(comments, list):
+        for comment in comments:
+            issue.append(comment2str(comment, attachments))
+    else:
+        issue.append(comment2str(comments, attachments))
+
+    return issue
+
+
+def bug2issue(bug):
+    """
+    Converts all Bugzilla report fileds to a new issue dictionary.
+    Dumps any unconverted fields, so all the fileds must be either converted
+    or listed as unused.
+
+    Args:
+        bug: A Bugzilla bug report dictionary.
+
+    Returns:
+        A new issue dictionary.
+    """
+    issue = new_issue(bug.pop("bug_id"), False)
+    attachments = {}
+
+    # Convert attachments if any
+    if "attachment" in bug:
+        attachments = attachments2dict(bug.pop("attachment"))
+    # Convert long_desc and attachment to comments
+    issue["comments"].extend(comments2list(bug.pop("long_desc"), attachments))
+    # Convert short_desc to title
+    issue["title"] = ("%s (" % bug.pop("short_desc") + BUG_SIGNATURE
+                      + "%d)" % issue["id"])
+    # Convert creation_ts to created_at
+    issue["created_at"] = bug.pop("creation_ts")
+    # Convert delta_ts to updated_at
+    issue["updated_at"] = bug.pop("delta_ts")
+    # Convert reporter to user login
+    issue["user.login"] = email2login(
+        bug.pop("reporter"), bug.pop("reporter.name", None))
+    # Convert assigned_to to assignees
+    issue["assignees"].append(
+        email2login(bug.pop("assigned_to"), bug.pop("assigned_to.name", None)))
+    # Convert component to labels
+    issue["labels"].extend(str2list(COMPONENT2LABELS, bug.pop("component")))
+    # Convert bug_status to state
+    issue["state"] = str2list(STATUS2STATE, bug.pop("bug_status"))
+    # Convert priority to labels
+    issue["labels"].extend(str2list(PRIORITY2LABELS, bug.pop("priority")))
+    # Convert severity to labels
+    issue["labels"].extend(str2list(SEVERITY2LABELS, bug.pop("bug_severity")))
+    # Convert resolution to labels
+    if "resolution" in bug:
+        issue["labels"].extend(
+            str2list(RESOLUTION2LABELS, bug.pop("resolution")))
+
+    # Create the bug description
     body = []
-    body.append("Note: the comment was created automatically with %s"
-                % os.path.basename(__file__))
+    body.extend([
+        "# " + BUG_SIGNATURE + "%d" % issue["id"],
+        "Date: " + issue["created_at"],
+        "From: " + issue["user.login"],
+        "To:   " + ", ".join(issue["assignees"]),
+    ])
+    if "cc" in bug:
+        body.append("CC:   " + emails2logins(bug.pop("cc")))
+    # Extra information
     body.append("")
-    body.append("---")
-    body.append("**Bugzilla bug ID:  %d**" % orig_id)
-    body.append("**Renumbered to issue: #%d**" % new_id)
+    if "dup_id" in bug:
+        body.append("Duplicates:   " + ids2ids(bug.pop("dup_id")))
+    if "dependson" in bug:
+        body.append("Depends on:   " + ids2ids(bug.pop("dependson")))
+    if "blocked" in bug:
+        body.append("Blocker for:  " + ids2ids(bug.pop("blocked")))
+    if "see_also" in bug:
+        if isinstance(bug["see_also"], list):
+            for see_also in bug.pop("see_also"):
+                body.append("See also:     " + see_also)
+        else:
+            body.append("See also:     " + bug.pop("see_also"))
+    body.append("Last updated: " + issue["updated_at"])
+    body.append("")
+
+    # Put everything together
+    issue["body"] += "\n".join(body) + "\n\n" + "\n".join(issue["comments"])
+    issue["assignees"] = [a[1:] for a in issue["assignees"] if a[0] == "@"]
+
+    # Ignore some bug fields
+    fields_ignore(bug, BUG_UNUSED_FIELDS)
+    # Make sure we have converted all the fields
+    if bug:
+        print("WARNING: unconverted bug fields:")
+        fields_dump(bug)
+    # Make sure we have converted all the attachments
+    if attachments:
+        print("WARNING: unused attachments:")
+        fields_dump(attachments)
+
+    return issue
+
+
+def bugs2dict(xml_root):
+    """
+    Converts XML root node to a dictionary of issues.
+
+    Args:
+        xml_root: The root XML element.
+
+    Returns:
+        A new dictionary of converted Bugzilla reports.
+    """
+    issues = {}
+    for xml_bug in xml_root.iter("bug"):
+        bug = XML2bug(xml_bug)
+        issue = bug2issue(bug)
+        # Check for duplicates
+        id = issue["id"]
+        if id in issues:
+            print("Error checking duplicates: #%d is duplicated in '%s'"
+                  % (id, XML_FILE))
+        issues[id] = issue
+
+    return issues
+
+
+########################################################################
+## Helper functions
+########################################################################
+
+
+def new_issue(id, dummy):
+    """
+    Creates a new issue.
+
+    Args:
+        id: The id of a new issue.
+        dummy: Set True to create a new dummy issue.
+
+    Returns:
+        A dictionary representing an issue with title, body, labels, assignees,
+        comments, id etc.
+    """
+    issue = {}
+    body = []
+    issue["labels"] = []
+    issue["assignees"] = []
+    issue["comments"] = []
+    issue["id"] = int(id)
+    issue["title"] = DELETED_BUG_SIGNATURE
+    issue["created_at"] = datetime.datetime.utcnow().replace(
+        microsecond=0).isoformat() + "Z"
+    issue["updated_at"] = issue["created_at"]
+    issue["user.login"] = "bugzilla2github"
+    issue["state"] = "closed"
+
+    body.extend([
+        "This issue was created automatically with %s" % NAME,
+        "",
+    ])
+    if (dummy):
+        body.extend([
+            "# " + DELETED_BUG_SIGNATURE,
+            "Date: " + issue["created_at"],
+            "",
+            "This bug was created during the import from Bugzilla.",
+            "GitHub Issues Tracker allows to assign consecutive",
+            "ids only. So this dummy issue was created in place of",
+            "a deleted Bugzilla Bug.",
+            "",
+            "Please ignore this report.",
+            "",
+        ])
+    issue["body"] = "\n".join(body)
+
+    return issue
+
+
+def new_renumber_comment(orig_id, new_id):
+    """
+    Creates a comment to renumber Bugzilla Bug orig_id to an issue #new_id.
+
+    Args:
+        orig_id: Original Bugzilla bug id.
+        new_id: New issue #id.
+
+    Returns:
+        A dictionary with comment in the "body", i.e. { "body": "comment" }
+    """
+    body = []
+    body.extend([
+        "This comment was created automatically with %s tool" % NAME,
+        "## NOTE: " + BUG_SIGNATURE + "%d" % orig_id
+        + " is renumbered to issue #%d" % new_id,
+        "If you are looking for a Bugzilla Bug %d," % orig_id
+        + " please follow issue #%d instead." % new_id,
+    ])
     comment = {
         "body": "\n".join(body)
     }
     return comment
 
 
-def github_comment_add(issue):
-    orig_id = issue["orig_number"]
-    new_id = issue["number"]
-    print("\tadding a comment to original issue #%d on GitHub..." % orig_id)
-    comment = renumbering_comment_create(orig_id, new_id)
-    r = github_post("issues/%d/comments" % orig_id, comment, ["body"])
-    if not r:
-        print("Error adding new comment to issue #%d on GitHub:\n%s"
-              % (orig_id, r.headers))
-        exit(1)
+def bug_id_parse(str):
+    """
+    Parses Bugzilla Bug id in a string.
 
+    Args:
+        str: String to parse Bugzilla Bug id (i.e. issue body or title)
 
-def github_comment_update(issue):
-    orig_id = issue["orig_number"]
-    new_id = issue["number"]
-    print("\tupdating comment to original issue #%d on GitHub..." % orig_id)
-    r = github_get("issues/%d/comments" % orig_id)
-    if r:
-        comments = r.json()
-        for comment in comments:
-            if not re.search(os.path.basename(__file__), comment["body"]):
-                continue
-            if not re.search(r"(?ims).*#([0-9]+).*", comment["body"]):
-                continue
-            bugzilla_id = re.sub(r"(?ims).*#([0-9]+).*", r"\1",
-                                 comment["body"])
-            if not bugzilla_id:
-                continue
-            bugzilla_id = int(bugzilla_id)
-            if bugzilla_id != new_id:
-                continue
-            comment_id = comment["id"]
-            print("\tupdating comment %d on GitHub..." % comment_id)
-            comment = renumbering_comment_create(orig_id, new_id)
-            r = github_post("issues/comments/%d" %
-                            comment_id, comment, ["body"])
-            if not r:
-                print("Error updating comment %d to issue #%d on GitHub:\n%s"
-                      % (comment_id, orig_id, r.headers))
-                exit(1)
-            return
-    print("\tcomment not found, adding a new one...")
-    github_comment_add(issue)
-
-
-def dummy_issue_create(id):
-    ret = {}
-    ret["dummy"] = True
-    ret["body"] = []
-    ret["labels"] = []
-    ret["assignees"] = []
-    ret["comments"] = []
-    ret["number"] = id
-    ret["title"] = "Deleted bug, please ignore (Bugzilla Bug %d)" \
-        % ret["number"]
-    ret["created_at"] = datetime.datetime.utcnow().replace(
-        microsecond=0).isoformat() + "Z"
-    ret["updated_at"] = ret["created_at"]
-    ret["user.login"] = "bugzilla2github"
-    ret["state"] = "closed"
-
-    ret["body"].append("Note: the issue was created automatically with %s"
-                       % os.path.basename(__file__))
-    ret["body"].append("")
-    ret["body"].append("# Dummy Bugzilla Bug ID: %d" % ret["number"])
-    ret["body"].append("Date: " + ret["created_at"])
-    ret["body"].append("")
-    ret["body"].append("This bug was created during the import from Bugzilla.")
-    ret["body"].append("Github Issues Tracker allows to assign consecutive")
-    ret["body"].append("IDs only. So this dummy issue was created in place of")
-    ret["body"].append("a deleted Bugzilla bug.")
-    ret["body"].append("")
-    ret["body"].append("Please ignore this report.")
-    ret["body"].append("")
-    ret["body"] = "\n".join(ret["body"])
-
-    return ret
-
-
-def github_issues_add(issues):
-    global max_bug_id
-    postponed = {}
-    nb_postponed = 0
-
-    for i in range(max_bug_id):
-        id = i + 1
-        if id in issues:
-            issue = issues[id]
+    Returns:
+        Integer id, 0 for the deleted bug or None if Bug id is not found.
+    """
+    idx = str.find(NAME)
+    if idx == -1:
+        return None
+    bug_id = re.search(r"(?ims)" + BUG_SIGNATURE + "([0-9]+)", str)
+    if bug_id:
+        return int(bug_id.group(1))
+    else:
+        idx = str.find(DELETED_BUG_SIGNATURE)
+        if idx != -1:
+            return 0  # bug_id is zero for the deleted bugs
         else:
-            issue = dummy_issue_create(id)
-
-        github_issue = github_get("issues/%d" % id)
-        if github_issue:
-            # Continue if there is no issue in Bugzilla
-            if "dummy" in issue:
-                continue
-            # Check if the issue was imported from the Bugzilla
-            github_issue = github_issue.json()
-            if ("bugzilla bug id: %d\n" % id).lower() \
-                    in github_issue["body"].lower():
-                print("Issue #%d already imported, updating..." % id)
-                github_issue_update(issue)
-            else:
-                print("Issue #%d already exists, postponing..." % id)
-                postponed[id] = issue
-                nb_postponed += 1
-        else:
-            if "dummy" in issue:
-                print("Creating DUMMY issue #%d (in place of a deleted bug)..."
-                      % id)
-            else:
-                print("Creating issue #%d..." % id)
-            # Make sure the previous issue already exist
-            if force_update and id > 1 and not github_issue_exist(id - 1):
-                print("Error adding issue #%d on GitHub:"
-                      + " previous issue does not exists"
-                      % id)
-                exit(1)
-            req = github_issue_append(issue)
-            if force_update:
-                new_issue = github_get(req.headers["location"]).json()
-                if new_issue["number"] != id:
-                    print("Error adding issue #%d:"
-                          " assigned unexpected issue id #%d"
-                          % (id, new_issue["number"]))
-                    exit(1)
-                # Update issue state
-                if not issue or issue["state"] != "open":
-                    github_issue_update(issue)
-
-    print("Done adding with %d issues postponed." % nb_postponed)
-
-    return postponed
+            return None
 
 
-def issue_renumber(orig_issue, new_id):
-    print("\trenumbering issue #%d to #%d..." % (orig_issue["number"], new_id))
-    orig_issue["orig_number"] = orig_issue["number"]
-    orig_issue["number"] = new_id
-
-
-def github_postponed_issues_add(issues, postponed):
-    global max_bug_id
-    id = max_bug_id
-    # First check existing GitHub issues
-    while True:
-        id += 1
-        print("Checking issue #%d on GitHub..." % id)
-        if not github_issue_exist(id):
-            print("\tissue #%d does not exist, breaking..." % id)
-            break
-        issue = github_issue_get(id)
-        if not re.search(os.path.basename(__file__), issue["body"]) \
-                or not re.search(r"(?ims).*Bugzilla Bug ID: ([0-9]+).*",
-                                 issue["body"]):
-            print("\tissue #%d is not from the Bugzilla, skipping..." % id)
-        else:
-            bugzilla_id = re.sub(
-                r"(?ims).*Bugzilla Bug ID: ([0-9]+).*", r"\1", issue["body"])
-            if bugzilla_id:
-                bugzilla_id = int(bugzilla_id)
-                if bugzilla_id not in postponed:
-                    print("\tBugzilla bug %d is not postponed, skipping..."
-                          % bugzilla_id)
-                    continue
-                print("\tissue #%d was imported from Bugzilla (bug %d), updating..." % (
-                    id, bugzilla_id))
-                bugzilla_issue = postponed.pop(bugzilla_id)
-                issue_renumber(bugzilla_issue, id)
-                github_issue_update(bugzilla_issue)
-                github_comment_update(bugzilla_issue)
-            else:
-                print("\tissue #%d is not from the Bugzilla, skipping..." % id)
-
-    # Now check the postponed issues and append them to the end of the issues
-    for i in range(max_bug_id):
-        id = i + 1
-        if id not in postponed:
-            continue
-        issue = postponed.pop(id)
-        print("Appending postponed issue #%d on GitHub..." % id)
-        req = github_issue_append(issue)
-        if force_update:
-            new_issue = github_get(req.headers["location"]).json()
-            issue_renumber(issue, new_issue["number"])
-            # Update issue state
-            if issue["state"] != "open":
-                github_issue_update(issue)
-            github_comment_add(issue)
+def usage():
+    """
+    Displays usage information and exits.
+    """
+    print("Bugzilla XML export file to GitHub Issues Converter")
+    print("Usage: %s [-h] [-f] [-d]" % NAME)
+    print("\t[-x <src XML file>]")
+    print("\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>")
+    print("Where:")
+    print("\t-h  usage information")
+    print("\t-f  force updates (actually post the changes to GitHub)")
+    print("\t-d  print debug information")
+    print("Example:")
+    print("\t%s -h" % NAME)
+    print("\t%s -x export.xml -o github_login -r GITHUB_REPO -t token" % NAME)
+    exit(1)
 
 
 def args_parse(argv):
-    global force_update, debug
-    global xml_file, github_owner, github_repo, github_token
+    """
+    Parses command line options and sets global variables accordingly.
+    """
+    global FORCE_UPDATES, DEBUG
+    global XML_FILE, GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN
 
     try:
         opts, args = getopt.getopt(argv, "hfdo:r:t:x:")
@@ -770,51 +905,49 @@ def args_parse(argv):
             print("WARNING: the repo will be UPDATED! No backups, no undos!")
             print("Press Ctrl+C within next 5 seconds to cancel the update:")
             time.sleep(5)
-            force_update = True
+            FORCE_UPDATES = True
         elif opt == "-d":
-            debug = True
+            DEBUG = True
         elif opt == "-o":
-            github_owner = arg
+            GITHUB_OWNER = arg
         elif opt == "-r":
-            github_repo = arg
+            GITHUB_REPO = arg
         elif opt == "-t":
-            github_token = arg
+            GITHUB_TOKEN = arg
         elif opt == "-x":
-            xml_file = arg
+            XML_FILE = arg
 
     # Check the arguments
-    if (not xml_file or not github_owner or not github_repo or not github_token):
+    if (not XML_FILE or not GITHUB_OWNER or not GITHUB_REPO or not GITHUB_TOKEN):
         print("Error parsing arguments: "
-              + "please specify XML file, GitHub owner, repo and token")
+              "please specify XML file, GitHub owner, repo and token")
         print()
         usage()
 
 
 def main(argv):
-    global xml_file, github_owner, github_repo, debug
-
-    # Parse command line arguments
+    """
+    Steps to convert Bugzilla exported bugs and post them on GitHub.
+    """
     args_parse(argv)
-    print("===> Converting Bugzilla reports to GitHub Issues...")
-    print("\tSource XML file:    %s" % xml_file)
-    print("\tDest. GitHub owner: %s" % github_owner)
-    print("\tDest. GitHub repo:  %s" % github_repo)
-    if debug:
+    print("===> Converting Bugzilla Bugs to GitHub Issues...")
+    print("\tSource XML file:    %s" % XML_FILE)
+    print("\tDest. GitHub owner: %s" % GITHUB_OWNER)
+    print("\tDest. GitHub repo:  %s" % GITHUB_REPO)
+    if DEBUG:
         print("\tDebug information:  on")
 
-    xml_tree = xml.etree.ElementTree.parse(xml_file)
+    xml_tree = xml.etree.ElementTree.parse(XML_FILE)
     xml_root = xml_tree.getroot()
-    issues = bugs_convert(xml_root)
+    issues = bugs2dict(xml_root)
 
-    print("===> Checking all the labels exist on GitHub...")
-    github_labels_check(issues)
-    print("===> Checking all the assignees exist on GitHub...")
+    print("===> Checking if all the labels exist on GitHub...")
+    github_labels_create(issues)
+    print("===> Checking if all the assignees exist on GitHub...")
     github_assignees_check(issues)
 
-    print("===> Adding Bugzilla reports on GitHub preserving IDs...")
-    postponed = github_issues_add(issues)
-    print("===> Appending postponed Bugzilla reports on GitHub with new IDs...")
-    github_postponed_issues_add(issues, postponed)
+    print("===> Posting Bugzilla reports to GitHub Issue Tracker...")
+    github_issues_add(issues)
     print("===> All done.")
 
 

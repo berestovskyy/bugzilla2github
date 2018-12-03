@@ -75,11 +75,18 @@ EMAIL2LOGIN = {
     "123@example.com": "login",
     "email@example.org": "berestovskyy",
 }
+# Is bug closed (True) or open (False)?
 STATUS2STATE = {
     "__name__": "status to GitHub state",
-    "CONFIRMED": "open",
-    "IN_PROGRESS": "open",
-    "RESOLVED": "closed",
+    "NEW": False,
+    "UNCONFIRMED": False,
+    "CONFIRMED": False,
+    "VERIFIED": False,
+    "ASSIGNED": False,
+    "IN_PROGRESS": False,
+    "RESOLVED": True,
+    "CLOSED": True,
+    "REOPENED": False,
 }
 COMPONENT2LABELS = {
     "__name__": "component to GitHub labels",
@@ -231,12 +238,6 @@ def github_issue_update(id, issue):
         print("Error updating #%d: Bugzilla Bug is missing" % id)
         exit(1)
 
-    r = github_post("issues/%d" % id, issue,
-                    ["title", "body", "state", "labels", "assignees"])
-    if not r:
-        print("Error updating issue #%d on GitHub:\n%s" % (id, r.headers))
-        exit(1)
-
     orig_id = issue["id"]
     if id != orig_id:
         github_comment_update(orig_id, id)
@@ -260,27 +261,46 @@ def github_issue_add(id, issue):
                   MUST not exist on GitHub
         issue: Converted Bugzilla Bug to be added.
     """
+    global GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN
+    params = { "access_token": GITHUB_TOKEN }
+
     print("\tadding a new issue #%d on GitHub..." % id)
     # Note: this still does not guarantee the new issue will be added as #id
-    r = github_post("issues", issue, ["title", "body", "labels", "assignees"])
+    issue.pop("number")
+    comments = issue.pop("comments", [])
+    headers = { "Accept": "application/vnd.github.golden-comet-preview+json" }
+    r = github_post("import/issues", json.dumps({ "issue": issue, "comments": comments }), headers=headers)
     if not r:
-        print("Error adding a new issue on GitHub:\n%s" % r.headers)
+        print("Error importing issue on GitHub:\n%s" % r.text)
+        print("For the record, here was the request:\n%s" % json.dumps({ "issue": issue, "comments": comments }))
         exit(1)
 
     if FORCE_UPDATES:
-        # Make sure the issue is added as #id
-        github_issue = github_issue_get(id)
-        if not github_issue:
-            print("Error adding issue: issue %d does not exist" % id)
-            exit(1)
-        bug_id = bug_id_parse(github_issue["body"])
-        if bug_id and bug_id != issue["id"]:
-            print("Error adding issue: issue %d is not %d"
-                  % (bug_id, issue["id"]))
+        # Wait until the issue is imported
+        u = r.json()["url"]
+        wait = 1
+        r = False
+        while not r or r.json()["status"] == "pending":
+            time.sleep(wait)
+            wait = 2 * wait
+            r = requests.get(u, params = params, headers = headers)
+        if not r.json()["status"] == "imported":
+            print("Error importing issue on GitHub:\n%s" % r.text)
             exit(1)
 
-    # Default state for the newly created issues is open, so we need to update
-    # the state and the renumbering comment.
+        # The issue_url field of the answer should be of the form .../ISSUE_NUMBER
+        # So it's easy to get the issue number, to check that it is what was expected
+        result = re.match("https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/issues/(\d+)", r.json()["issue_url"])
+        if not result:
+            print("Error while parsing issue number:\n%s" % r.text)
+            exit(1)
+        issue_number = int(result.group(1))
+        if issue_number != id:
+            print("Error adding issue: issue %d is not %d"
+                  % (issue_number, id))
+            exit(1)
+
+    # we need to update the renumbering comment.
     github_issue_update(id, issue)
 
     return r
@@ -317,7 +337,7 @@ def github_get(url, dict={}):
     return requests.get(u, params=dict)
 
 
-def github_post(url, dict={}, fields=[]):
+def github_post(url, dict={}, fields=[], headers=None):
     """
     Sends POST request to a specified URL. If global flag FORCE_UPDATES
     is not set, the function prints a warning and just returns True.
@@ -353,7 +373,7 @@ def github_post(url, dict={}, fields=[]):
 
     if FORCE_UPDATES:
         return requests.post(u, params={"access_token": GITHUB_TOKEN},
-                             data=json.dumps(d))
+                             headers=headers, data=json.dumps(d))
     else:
         if not github_post.POST_WARNING_PRINTED:
             print("Skipping POST... (use -f to force updates)")
@@ -605,14 +625,20 @@ def attachments2dict(attachments):
 
     return issue
 
+def bugzilladate2githubdate(date):
+    result = re.match(r'(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d) \+(\d\d)(\d\d)', date)
+    if not result:
+        print("Date %s was not converted!" % date)
+        exit(1)
+    return "{a}T{b}+{c}:{d}".format(a = result.group(1), b = result.group(2),
+                                    c = result.group(3), d = result.group(4))
 
-def comment2str(comment, attachments):
+def comment2dict(comment, attachments):
     """Converts Bugzilla comment to a string."""
-    ret = []
+    body = []
 
-    ret.extend([
+    body.extend([
         "## Comment " + comment.pop("commentid"),
-        "Date: " + comment.pop("bug_when"),
         "From: " + email2login(comment.pop("who"),
                                comment.pop("who.name", None)),
         "",
@@ -621,15 +647,17 @@ def comment2str(comment, attachments):
     ])
     # Convert attachments if any
     if "attachid" in comment:
-        ret.extend([
+        body.extend([
             attachments.pop(comment.pop("attachid")),
             ""
         ])
-    ret.append("")
+    body.append("")
 
     # Syntax: convert "bug id" to "bug #id"
     for i, val in enumerate(ret):
-        ret[i] = re.sub(r"(?i)(bug)\s+([0-9]+)", r"\1 #\2", val)
+        body[i] = re.sub(r"(?i)(bug)\s+([0-9]+)", r"\1 #\2", val)
+
+    created_at = bugzilladate2githubdate(comment.pop("bug_when"))
 
     # Ignore some comment fields
     fields_ignore(comment, COMMENT_UNUSED_FIELDS)
@@ -638,7 +666,7 @@ def comment2str(comment, attachments):
         print("WARNING: unconverted comment fields:")
         fields_dump(comment)
 
-    return "\n".join(ret)
+    return { "body": "\n".join(body), "created_at": created_at }
 
 
 def comments2list(comments, attachments):
@@ -646,9 +674,9 @@ def comments2list(comments, attachments):
     issue = []
     if isinstance(comments, list):
         for comment in comments:
-            issue.append(comment2str(comment, attachments))
+            issue.append(comment2dict(comment, attachments))
     else:
-        issue.append(comment2str(comments, attachments))
+        issue.append(comment2dict(comments, attachments))
 
     return issue
 
@@ -677,11 +705,11 @@ def bug2issue(bug):
     issue["title"] = ("%s (" % bug.pop("short_desc") + BUG_SIGNATURE
                       + "%d)" % issue["id"])
     # Convert creation_ts to created_at
-    issue["created_at"] = bug.pop("creation_ts")
+    issue["created_at"] = bugzilladate2githubdate(bug.pop("creation_ts"))
     # Convert delta_ts to updated_at
-    issue["updated_at"] = bug.pop("delta_ts")
+    issue["updated_at"] = bugzilladate2githubdate(bug.pop("delta_ts"))
     # Convert reporter to user login
-    issue["user.login"] = email2login(
+    user_login = email2login(
         bug.pop("reporter"), bug.pop("reporter.name", None))
     # Convert assigned_to to assignees
     issue["assignees"].append(
@@ -689,7 +717,9 @@ def bug2issue(bug):
     # Convert component to labels
     issue["labels"].extend(str2list(COMPONENT2LABELS, bug.pop("component")))
     # Convert bug_status to state
-    issue["state"] = str2list(STATUS2STATE, bug.pop("bug_status"))
+    issue["closed"] = str2list(STATUS2STATE, bug.pop("bug_status"))
+    if issue["closed"]:
+        issue["closed_at"] = issue["updated_at"]
     # Convert priority to labels
     issue["labels"].extend(str2list(PRIORITY2LABELS, bug.pop("priority")))
     # Convert severity to labels
@@ -703,8 +733,7 @@ def bug2issue(bug):
     body = []
     body.extend([
         "# " + BUG_SIGNATURE + "%d" % issue["id"],
-        "Date: " + issue["created_at"],
-        "From: " + issue["user.login"],
+        "From: " + user_login,
         "To:   " + ", ".join(issue["assignees"]),
     ])
     if "cc" in bug:
@@ -723,11 +752,9 @@ def bug2issue(bug):
                 body.append("See also:     " + see_also)
         else:
             body.append("See also:     " + bug.pop("see_also"))
-    body.append("Last updated: " + issue["updated_at"])
-    body.append("")
 
     # Put everything together
-    issue["body"] += "\n".join(body) + "\n\n" + "\n".join(issue["comments"])
+    issue["body"] += "\n".join(body)
     issue["assignees"] = [a[1:] for a in issue["assignees"] if a[0] == "@"]
 
     # Ignore some bug fields
@@ -795,8 +822,7 @@ def new_issue(id, dummy):
     issue["created_at"] = datetime.datetime.utcnow().replace(
         microsecond=0).isoformat() + "Z"
     issue["updated_at"] = issue["created_at"]
-    issue["user.login"] = "bugzilla2github"
-    issue["state"] = "closed"
+    issue["closed"] = True
 
     body.extend([
         "This issue was created automatically with %s" % NAME,
@@ -805,7 +831,6 @@ def new_issue(id, dummy):
     if (dummy):
         body.extend([
             "# " + DELETED_BUG_SIGNATURE,
-            "Date: " + issue["created_at"],
             "",
             "This bug was created during the import from Bugzilla.",
             "GitHub Issues Tracker allows to assign consecutive",

@@ -9,8 +9,29 @@ Bugzilla components, priorities, severities, resolutions to GitHub labels.
 
 Latest updates:
 
-2018-06-20 -- new better algorithm to post new and deleted bugs
-2018-06-15 -- added support for deleted bugs (see below)
+* 2018-12-22 -- added support for GitHub beta import API
+  (activate with `-b` command line option)
+* 2018-06-20 -- new better algorithm to post new and deleted bugs
+* 2018-06-15 -- added support for deleted bugs (see below)
+
+
+Notes on GitHub beta import API
+-------------------------------
+Thanks to Théo Zimmermann and Martin Michlmayr, bugzilla2github now supports
+GitHub beta import API. Advantages of the new API:
+
+* should import faster;
+* does not trigger notifications for users;
+* has a better support for bug comments.
+
+The results of the beta API run is available here:
+https://github.com/berestovskyy/bugzilla2github-demo-beta/issues
+
+Note that beta API does not support issue update, so bugzilla2github falls back
+to stable API in case of script interrupt.
+
+More about GitHub beta import API:
+https://gist.github.com/jonmagic/5282384165e0f86ef105
 
 
 MANAGING CONFLICTS
@@ -29,7 +50,7 @@ Bugzilla bugs #1-10 were renumbered to #101-110.
 
 DELETED BUGS
 ------------
-Github Issues Tracker allows to assign consecutive IDs only.
+Github Issues Tracker allows assigning consecutive IDs only.
 So bugzilla2github creates dummy issues in place of a deleted original
 Bugzilla bugs.
 

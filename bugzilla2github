@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2018 Andriy Berestovskyy <berestovskyy@gmail.com>
+#
 # Bugzilla XML File to GitHub Issues Converter
-# by Andriy Berestovskyy <berestovskyy@gmail.com>
 #
 # How to use the script:
 # 1. Export Bugzilla issues into an XML file:
@@ -13,6 +15,7 @@
 #
 # 2. Generate a GitHub access token:
 #    - on GitHub select "Settings"
+#    - select "Developer settings"
 #    - select "Personal access tokens"
 #    - click "Generate new token"
 #    - type a token description, i.e. "bugzilla2github"
@@ -47,6 +50,11 @@ sys.setdefaultencoding('utf-8')
 ## Global variables
 ########################################################################
 
+# By default use stable GitHub APIv3.
+# Use -b command line argument for GitHub beta import API.
+USE_BETA_API = False
+# Beta import API application
+GITHUB_BETA_APP = "application/vnd.github.golden-comet-preview+json"
 # Script name, i.e. bugzilla2github
 NAME = os.path.basename(__file__)
 # This signature is used to detect if the bug was imported from Bugzilla
@@ -75,18 +83,22 @@ EMAIL2LOGIN = {
     "123@example.com": "login",
     "email@example.org": "berestovskyy",
 }
-# Is bug closed (True) or open (False)?
 STATUS2STATE = {
-    "__name__": "status to GitHub state",
-    "NEW": False,
-    "UNCONFIRMED": False,
-    "CONFIRMED": False,
-    "VERIFIED": False,
-    "ASSIGNED": False,
-    "IN_PROGRESS": False,
-    "RESOLVED": True,
-    "CLOSED": True,
-    "REOPENED": False,
+    "__name__": "status to GitHub state (stable APIv3)",
+    "NEW": "open",
+    "UNCONFIRMED": "open",
+    "CONFIRMED": "open",
+    "VERIFIED": "open",
+    "ASSIGNED": "open",
+    "IN_PROGRESS": "open",
+    "RESOLVED": "closed",
+    "CLOSED": "closed",
+    "REOPENED": "open",
+}
+STATE2CLOSED_BETA = {
+    "__name__": "stable API state to beta API closed",
+    "open": False,
+    "closed": True,
 }
 COMPONENT2LABELS = {
     "__name__": "component to GitHub labels",
@@ -238,16 +250,106 @@ def github_issue_update(id, issue):
         print("Error updating #%d: Bugzilla Bug is missing" % id)
         exit(1)
 
+    # TODO: There is no update functionality in beta API,
+    # so we use stable API to update the issue
+    r = github_post("issues/%d" % id, issue,
+                    ["title", "body", "state", "labels", "assignees"])
+    if not r:
+        print("Error updating issue #%d on GitHub:\n%s" % (id, r.text))
+        exit(1)
+
     orig_id = issue["id"]
     if id != orig_id:
         github_comment_update(orig_id, id)
+
+
+def github_issue_add_stable(id, issue):
+    # Note: this still does not guarantee the new issue will be added as #id
+    r = github_post("issues", issue, ["title", "body", "labels", "assignees"])
+    if not r:
+        print("Error adding a new issue on GitHub:\n%s" % r.text)
+        exit(1)
+
+    if FORCE_UPDATES:
+        # Make sure the issue is added as #id
+        github_issue = github_issue_get(id)
+        if not github_issue:
+            print("Error adding issue: issue %d does not exist" % id)
+            exit(1)
+        bug_id = bug_id_parse(github_issue["body"])
+        if bug_id and bug_id != issue["id"]:
+            print("Error adding issue: issue %d is not %d"
+                  % (bug_id, issue["id"]))
+            exit(1)
+
+    # Default state for the newly created issues is open, so we need to update
+    # the state and the renumbering comment.
+    github_issue_update(id, issue)
+
+    return r
+
+
+def github_issue_add_beta(id, issue):
+    # Note: this still does not guarantee the new issue will be added as #id
+
+    # Convert issue to beta import API
+    comments = issue.pop("comments", [])
+    assignees = issue.pop("assignees", [])
+    if len(assignees) > 0:
+        issue["assignee"] = assignees[0]
+    old_id = issue.pop("id", 0)
+    issue_comments = {"issue": issue, "comments": comments}
+
+    r = github_post("import/issues", issue_comments, ["issue", "comments"])
+    if not r:
+        print("Error importing a new issue on GitHub:\n%s" % r.text)
+        exit(1)
+
+    # Convert issue back to stable API
+    issue["id"] = old_id
+    issue["assignees"] = assignees
+
+    if FORCE_UPDATES:
+        # Wait until the issue is imported
+        u = r.json()["url"]
+        wait = 1
+        r = False
+        while not r or r.json()["status"] == "pending":
+            time.sleep(wait)
+            wait = 2 * wait
+            r = github_get(u)
+        if not r.json()["status"] == "imported":
+            print("Error importing issue on GitHub:\n%s" % r.text)
+            exit(1)
+
+        # The issue_url field of the answer should be of the form
+        # .../ISSUE_NUMBER so it's easy to get the issue number,
+        # to check that it is what was expected.
+        result = re.match("https://api.github.com/repos/" + GITHUB_OWNER +
+                          "/" + GITHUB_REPO + "/issues/(\d+)",
+                          r.json()["issue_url"])
+        if not result:
+            print("Error while parsing issue number:\n%s" %
+                  r.json()["issue_url"])
+            exit(1)
+        issue_number = int(result.group(1))
+        if issue_number != id:
+            print("Error adding issue: issue %d is not %d"
+                  % (issue_number, id))
+            exit(1)
+
+    # Need to update the renumbering comment
+    github_issue_update(id, issue)
+
+    return r
 
 
 def github_issue_add(id, issue):
     """
     Adds issue #id to GitHub. GitHub does not allow direct issue id
     assignment, so prior to call this function, a previous issue (i.e. issue
-    #id-1) MUST exist on GitHub and the issue to add (i.e. issue #id) MUST NOT exist on GitHub.
+    #id-1) MUST exist on GitHub and the issue to add (i.e. issue #id) MUST NOT
+    exist on GitHub.
 
     Still, if someone in parallel adds an issue on GitHub, there is
     no guarantee the newly added issue will be added as #id.
@@ -261,52 +363,15 @@ def github_issue_add(id, issue):
                   MUST not exist on GitHub
         issue: Converted Bugzilla Bug to be added.
     """
-    global GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN
-    params = { "access_token": GITHUB_TOKEN }
-
     print("\tadding a new issue #%d on GitHub..." % id)
-    # Note: this still does not guarantee the new issue will be added as #id
-    issue.pop("number")
-    comments = issue.pop("comments", [])
-    headers = { "Accept": "application/vnd.github.golden-comet-preview+json" }
-    r = github_post("import/issues", json.dumps({ "issue": issue, "comments": comments }), headers=headers)
-    if not r:
-        print("Error importing issue on GitHub:\n%s" % r.text)
-        print("For the record, here was the request:\n%s" % json.dumps({ "issue": issue, "comments": comments }))
-        exit(1)
 
-    if FORCE_UPDATES:
-        # Wait until the issue is imported
-        u = r.json()["url"]
-        wait = 1
-        r = False
-        while not r or r.json()["status"] == "pending":
-            time.sleep(wait)
-            wait = 2 * wait
-            r = requests.get(u, params = params, headers = headers)
-        if not r.json()["status"] == "imported":
-            print("Error importing issue on GitHub:\n%s" % r.text)
-            exit(1)
-
-        # The issue_url field of the answer should be of the form .../ISSUE_NUMBER
-        # So it's easy to get the issue number, to check that it is what was expected
-        result = re.match("https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/issues/(\d+)", r.json()["issue_url"])
-        if not result:
-            print("Error while parsing issue number:\n%s" % r.text)
-            exit(1)
-        issue_number = int(result.group(1))
-        if issue_number != id:
-            print("Error adding issue: issue %d is not %d"
-                  % (issue_number, id))
-            exit(1)
-
-    # we need to update the renumbering comment.
-    github_issue_update(id, issue)
-
-    return r
+    if USE_BETA_API:
+        return github_issue_add_beta(id, issue)
+    else:
+        return github_issue_add_stable(id, issue)
 
 
-def github_get(url, dict={}):
+def github_get(url, params={}):
     """
     Sends GET request to GitHub or a specified URL.
 
@@ -316,7 +381,8 @@ def github_get(url, dict={}):
              'http://' or 'https://' -- the request is sent to the specified url
              otherwise the request is sent to:
                 GitHub API URL + /repos/ + GitHub Owner + GitHub Repo + url
-        dict: An optional dictionary to be sent in the query.
+        params: An optional dictionary to be sent in the query.
+        headers: An optional dictionary to be sent in the headers.
 
     Returns:
         A response object.
@@ -330,14 +396,26 @@ def github_get(url, dict={}):
     else:
         u = "%s/repos/%s/%s/%s" % (GITHUB_API, GITHUB_OWNER, GITHUB_REPO, url)
 
+    if USE_BETA_API:
+        params = {}
+        headers = {
+            "Accept": GITHUB_BETA_APP,
+            "Authorization": "token " + GITHUB_TOKEN,
+        }
+    else:
+        params = {"access_token": GITHUB_TOKEN}
+        headers = {}
+
     if DEBUG:
-        print("GET: " + u)
+        print("DEBUG GET: " + u)
+        # It's insecure to dump the token
+        # print("DEBUG PARAMS: " + json.dumps(params))
+        # print("DEBUG HEADERS: " + json.dumps(headers))
 
-    dict["access_token"] = GITHUB_TOKEN
-    return requests.get(u, params=dict)
+    return requests.get(u, params=params, headers=headers)
 
 
-def github_post(url, dict={}, fields=[], headers=None):
+def github_post(url, dict={}, fields=[]):
     """
     Sends POST request to a specified URL. If global flag FORCE_UPDATES
     is not set, the function prints a warning and just returns True.
@@ -347,7 +425,7 @@ def github_post(url, dict={}, fields=[], headers=None):
              '/' -- the request is sent to main GitHub API URL + url string
              otherwise the request is sent to:
                 GitHub API URL + /repos/ + GitHub Owner + GitHub Repo + url
-        dict: An optional dictionary to be sent in the query.
+        dict: An optional dictionary to be posted.
         fields: An optional list of fields to send from the dictionary.
 
     Returns:
@@ -363,17 +441,29 @@ def github_post(url, dict={}, fields=[], headers=None):
     # Copy fields into the data
     for field in fields:
         if field not in dict:
-            print("Error posting filed %s to %s" % (field, url))
+            print("Error posting field '%s' to %s" % (field, url))
             exit(1)
         d[field] = dict[field]
 
+    if USE_BETA_API:
+        params = {}
+        headers = {
+            "Accept": GITHUB_BETA_APP,
+            "Authorization": "token " + GITHUB_TOKEN,
+        }
+    else:
+        params = {"access_token": GITHUB_TOKEN}
+        headers = {}
+    data = json.dumps(d)
     if DEBUG:
-        print("POST: " + u)
-        print("DATA: " + json.dumps(d))
+        print("DEBUG POST: " + u)
+        # It's insecure to dump the token
+        # print("DEBUG PARAMS: " + json.dumps(params))
+        # print("DEBUG HEADERS: " + json.dumps(headers))
+        print("DEBUG DATA: " + json.dumps(d))
 
     if FORCE_UPDATES:
-        return requests.post(u, params={"access_token": GITHUB_TOKEN},
-                             headers=headers, data=json.dumps(d))
+        return requests.post(u, params=params, headers=headers, data=data)
     else:
         if not github_post.POST_WARNING_PRINTED:
             print("Skipping POST... (use -f to force updates)")
@@ -398,7 +488,7 @@ def github_comment_add(orig_id, new_id):
     r = github_post("issues/%d/comments" % orig_id, comment, ["body"])
     if not r:
         print("Error adding new comment to issue #%d on GitHub:\n%s"
-              % (orig_id, r.headers))
+              % (orig_id, r.text))
         exit(1)
 
 
@@ -426,7 +516,7 @@ def github_comment_update(orig_id, new_id):
                             comment_id, comment, ["body"])
             if not r:
                 print("Error updating comment %d on GitHub issue #%d:\n%s"
-                      % (comment_id, orig_id, r.headers))
+                      % (comment_id, orig_id, r.text))
                 exit(1)
             return
     print("\tno comment found on #%d, adding a new one..." % orig_id)
@@ -446,7 +536,7 @@ def github_label_create(label):
         "color": "0"*6,
     }, ["name", "color"])
     if not r:
-        print("Error creating label %s: %s" % (label, r.headers))
+        print("Error creating label %s: %s" % (label, r.text))
         exit(1)
 
 
@@ -508,25 +598,35 @@ def XML2bug(parent):
     """
     issue = {}
 
+    if DEBUG:
+        print("DEBUG XML:")
     for key in parent:
-        if DEBUG:
-            print(len(key), key.tag, key.attrib, key.text)
-
         if len(key) > 0:
+            if DEBUG:
+                print("\t> %s" % key.tag)
             val = XML2bug(key)
         else:
             val = key.text
         if key.text:
             if key.tag not in issue:
                 issue[key.tag] = val
+                if DEBUG:
+                    print("\tissue['%s'] = '%s'" % (key.tag, val))
             else:
                 if isinstance(issue[key.tag], list):
                     issue[key.tag].append(val)
+                    if DEBUG:
+                        print("\tissue['%s'].append('%s')" % (key.tag, val))
                 else:
                     issue[key.tag] = [issue[key.tag], val]
+                    if DEBUG:
+                        print("\tissue['%s'] = [issue['%s'], '%s']" %
+                              (key.tag, key.tag, val))
         # Parse attributes
         for name, val in key.items():
             issue["%s.%s" % (key.tag, name)] = val
+            if DEBUG:
+                print("\tissue['%s.%s'] = '%s'" % (key.tag, name, val))
 
     return issue
 
@@ -625,20 +725,28 @@ def attachments2dict(attachments):
 
     return issue
 
+
 def bugzilladate2githubdate(date):
-    result = re.match(r'(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d) \+(\d\d)(\d\d)', date)
-    if not result:
-        print("Date %s was not converted!" % date)
-        exit(1)
-    return "{a}T{b}+{c}:{d}".format(a = result.group(1), b = result.group(2),
-                                    c = result.group(3), d = result.group(4))
+	    result = re.match(
+	        r'(\d\d\d\d-\d\d-\d\d) (\d\d:\d\d:\d\d) \+(\d\d)(\d\d)', date)
+	    if not result:
+	        print("Date %s was not converted!" % date)
+	        exit(1)
+	    return "{a}T{b}+{c}:{d}".format(a=result.group(1), b=result.group(2),
+	                                    c=result.group(3), d=result.group(4))
+
 
 def comment2dict(comment, attachments):
-    """Converts Bugzilla comment to a string."""
+    """
+    Converts Bugzilla comment to a string (stable APIv3)
+    or a dictionary (beta import API).
+    """
     body = []
 
+    bug_when = comment.pop("bug_when")
     body.extend([
         "## Comment " + comment.pop("commentid"),
+        "Date: " + bug_when,
         "From: " + email2login(comment.pop("who"),
                                comment.pop("who.name", None)),
         "",
@@ -654,10 +762,8 @@ def comment2dict(comment, attachments):
     body.append("")
 
     # Syntax: convert "bug id" to "bug #id"
-    for i, val in enumerate(ret):
+    for i, val in enumerate(body):
         body[i] = re.sub(r"(?i)(bug)\s+([0-9]+)", r"\1 #\2", val)
-
-    created_at = bugzilladate2githubdate(comment.pop("bug_when"))
 
     # Ignore some comment fields
     fields_ignore(comment, COMMENT_UNUSED_FIELDS)
@@ -666,11 +772,20 @@ def comment2dict(comment, attachments):
         print("WARNING: unconverted comment fields:")
         fields_dump(comment)
 
-    return { "body": "\n".join(body), "created_at": created_at }
+    if USE_BETA_API:
+        created_at = bugzilladate2githubdate(bug_when)
+        # Return a dictionary (beta import API)
+        return {"body": "\n".join(body), "created_at": created_at}
+    else:
+        # Return a string (stable APIv3)
+        return "\n".join(body)
 
 
 def comments2list(comments, attachments):
-    """Converts Bugzilla comments to a list of strings."""
+    """
+    Converts Bugzilla comments to a list of
+    strings (stable APIv3) or dictionaries (beta import API).
+    """
     issue = []
     if isinstance(comments, list):
         for comment in comments:
@@ -683,8 +798,8 @@ def comments2list(comments, attachments):
 
 def bug2issue(bug):
     """
-    Converts all Bugzilla report fileds to a new issue dictionary.
-    Dumps any unconverted fields, so all the fileds must be either converted
+    Converts all Bugzilla report fields to a new issue dictionary.
+    Dumps any unconverted fields, so all the fields must be either converted
     or listed as unused.
 
     Args:
@@ -704,22 +819,32 @@ def bug2issue(bug):
     # Convert short_desc to title
     issue["title"] = ("%s (" % bug.pop("short_desc") + BUG_SIGNATURE
                       + "%d)" % issue["id"])
-    # Convert creation_ts to created_at
-    issue["created_at"] = bugzilladate2githubdate(bug.pop("creation_ts"))
-    # Convert delta_ts to updated_at
-    issue["updated_at"] = bugzilladate2githubdate(bug.pop("delta_ts"))
     # Convert reporter to user login
-    user_login = email2login(
-        bug.pop("reporter"), bug.pop("reporter.name", None))
+    user_login = email2login(bug.pop("reporter"),
+                             bug.pop("reporter.name", None))
     # Convert assigned_to to assignees
     issue["assignees"].append(
         email2login(bug.pop("assigned_to"), bug.pop("assigned_to.name", None)))
     # Convert component to labels
     issue["labels"].extend(str2list(COMPONENT2LABELS, bug.pop("component")))
     # Convert bug_status to state
-    issue["closed"] = str2list(STATUS2STATE, bug.pop("bug_status"))
-    if issue["closed"]:
-        issue["closed_at"] = issue["updated_at"]
+    issue["state"] = str2list(STATUS2STATE, bug.pop("bug_status"))
+    if USE_BETA_API:
+        # Convert creation_ts to created_at
+        issue["created_at"] = bugzilladate2githubdate(bug.pop("creation_ts"))
+        # Convert delta_ts to updated_at
+        issue["updated_at"] = bugzilladate2githubdate(bug.pop("delta_ts"))
+        # Convert bug_status to closed
+        issue["closed"] = str2list(STATE2CLOSED_BETA, issue["state"])
+        if issue["closed"]:
+            issue["closed_at"] = issue["updated_at"]
+    else:
+        # Convert creation_ts to created_at
+        issue["created_at"] = bug.pop("creation_ts")
+        # Convert delta_ts to updated_at
+        issue["updated_at"] = bug.pop("delta_ts")
+        issue["user.login"] = user_login
+
     # Convert priority to labels
     issue["labels"].extend(str2list(PRIORITY2LABELS, bug.pop("priority")))
     # Convert severity to labels
@@ -733,6 +858,7 @@ def bug2issue(bug):
     body = []
     body.extend([
         "# " + BUG_SIGNATURE + "%d" % issue["id"],
+        "Date: " + issue["created_at"],
         "From: " + user_login,
         "To:   " + ", ".join(issue["assignees"]),
     ])
@@ -752,10 +878,19 @@ def bug2issue(bug):
                 body.append("See also:     " + see_also)
         else:
             body.append("See also:     " + bug.pop("see_also"))
+    body.append("Last updated: " + issue["updated_at"])
+    body.append("")
 
     # Put everything together
-    issue["body"] += "\n".join(body)
+    if USE_BETA_API:
+        issue["body"] += "\n".join(body)
+    else:
+        issue["body"] += "\n".join(body) + "\n\n" + \
+            "\n".join(issue["comments"])
     issue["assignees"] = [a[1:] for a in issue["assignees"] if a[0] == "@"]
+    # Get unique labels
+    labels_set = set(issue["labels"])
+    issue["labels"] = list(labels_set)
 
     # Ignore some bug fields
     fields_ignore(bug, BUG_UNUSED_FIELDS)
@@ -822,7 +957,11 @@ def new_issue(id, dummy):
     issue["created_at"] = datetime.datetime.utcnow().replace(
         microsecond=0).isoformat() + "Z"
     issue["updated_at"] = issue["created_at"]
-    issue["closed"] = True
+    issue["state"] = "closed"
+    if USE_BETA_API:
+        issue["closed"] = True
+    else:
+        issue["user.login"] = "bugzilla2github"
 
     body.extend([
         "This issue was created automatically with %s" % NAME,
@@ -831,6 +970,7 @@ def new_issue(id, dummy):
     if (dummy):
         body.extend([
             "# " + DELETED_BUG_SIGNATURE,
+            "Date: " + issue["created_at"],
             "",
             "This bug was created during the import from Bugzilla.",
             "GitHub Issues Tracker allows to assign consecutive",
@@ -899,10 +1039,11 @@ def usage():
     Displays usage information and exits.
     """
     print("Bugzilla XML export file to GitHub Issues Converter")
-    print("Usage: %s [-h] [-f] [-d]" % NAME)
+    print("Usage: %s [-b] [-h] [-f] [-d]" % NAME)
     print("\t[-x <src XML file>]")
     print("\t-o <GitHub owner> -r <GitHub repo> -t <GitHub access token>")
     print("Where:")
+    print("\t-b  use GitHub beta import API")
     print("\t-h  usage information")
     print("\t-f  force updates (actually post the changes to GitHub)")
     print("\t-d  print debug information")
@@ -916,19 +1057,26 @@ def args_parse(argv):
     """
     Parses command line options and sets global variables accordingly.
     """
-    global FORCE_UPDATES, DEBUG
+    global FORCE_UPDATES, DEBUG, USE_BETA_API
     global XML_FILE, GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN
 
     try:
-        opts, args = getopt.getopt(argv, "hfdo:r:t:x:")
+        opts, args = getopt.getopt(argv, "ehfdo:r:t:x:")
     except getopt.GetoptError:
         usage()
     for opt, arg in opts:
+        if opt == '-e':
+            print(
+                "WARNING: Using GitHub beta import API. "
+                "Please report issues here:\n"
+                "\t https://github.com/berestovskyy/bugzilla2github/issues")
+            USE_BETA_API = True
         if opt == '-h':
             usage()
         elif opt == "-f":
-            print("WARNING: the repo will be UPDATED! No backups, no undos!")
-            print("Press Ctrl+C within next 5 seconds to cancel the update:")
+            print(
+                "WARNING: The repo will be UPDATED! No backups, no undos!\n"
+                "Press Ctrl+C within next 5 seconds to cancel the update:")
             time.sleep(5)
             FORCE_UPDATES = True
         elif opt == "-d":
@@ -943,7 +1091,8 @@ def args_parse(argv):
             XML_FILE = arg
 
     # Check the arguments
-    if (not XML_FILE or not GITHUB_OWNER or not GITHUB_REPO or not GITHUB_TOKEN):
+    if (not XML_FILE or not GITHUB_OWNER or not GITHUB_REPO or
+            not GITHUB_TOKEN):
         print("Error parsing arguments: "
               "please specify XML file, GitHub owner, repo and token")
         print()
@@ -956,11 +1105,13 @@ def main(argv):
     """
     args_parse(argv)
     print("===> Converting Bugzilla Bugs to GitHub Issues...")
-    print("\tSource XML file:    %s" % XML_FILE)
-    print("\tDest. GitHub owner: %s" % GITHUB_OWNER)
-    print("\tDest. GitHub repo:  %s" % GITHUB_REPO)
+    print("\tSource XML file:          %s" % XML_FILE)
+    print("\tDestination GitHub owner: %s" % GITHUB_OWNER)
+    print("\tDestination GitHub repo:  %s" % GITHUB_REPO)
     if DEBUG:
-        print("\tDebug information:  on")
+        print("\tDebug information:        on")
+    if USE_BETA_API:
+        print("\tUsing beta import API:    on")
 
     xml_tree = xml.etree.ElementTree.parse(XML_FILE)
     xml_root = xml_tree.getroot()

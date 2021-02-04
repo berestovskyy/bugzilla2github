@@ -43,8 +43,9 @@ import time
 import xml.etree.ElementTree
 from six.moves import range
 
-reload(sys)
-sys.setdefaultencoding('utf-8')
+if sys.version[0] == '2':
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
 
 ########################################################################
 ## Global variables

@@ -24,8 +24,9 @@ import requests
 import sys
 import time
 
-reload(sys)
-sys.setdefaultencoding('utf-8')
+if sys.version[0] == '2':
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
 
 force_update = False
 github_url = "https://api.github.com"

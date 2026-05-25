@@ -737,6 +737,13 @@ def bugzilladate2githubdate(date):
 	                                    c=result.group(3), d=result.group(4))
 
 
+def current_githubdate():
+    if hasattr(datetime, "timezone"):
+        return datetime.datetime.now(datetime.timezone.utc).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z")
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def comment2dict(comment, attachments):
     """
     Converts Bugzilla comment to a string (stable APIv3)
@@ -955,8 +962,7 @@ def new_issue(id, dummy):
     issue["comments"] = []
     issue["id"] = int(id)
     issue["title"] = DELETED_BUG_SIGNATURE
-    issue["created_at"] = datetime.datetime.utcnow().replace(
-        microsecond=0).isoformat() + "Z"
+    issue["created_at"] = current_githubdate()
     issue["updated_at"] = issue["created_at"]
     issue["state"] = "closed"
     if USE_BETA_API:

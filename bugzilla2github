@@ -38,7 +38,6 @@ import pprint
 import re
 import requests
 import sys
-import datetime
 import time
 import xml.etree.ElementTree
 from six.moves import range
@@ -738,9 +737,6 @@ def bugzilladate2githubdate(date):
 
 
 def current_githubdate():
-    if hasattr(datetime, "timezone"):
-        return datetime.datetime.now(datetime.timezone.utc).replace(
-            microsecond=0).isoformat().replace("+00:00", "Z")
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
